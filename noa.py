@@ -1,47 +1,37 @@
 # noa.py
-# ノア：対話の最小実装（AIなし）
+# ノア：ChatGPT接続版（最小）
 
 from pathlib import Path
+from openai import OpenAI
 
+# パス設定
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.txt"
 
+# OpenAI クライアント
+client = OpenAI()
 
 def load_config():
-    if not CONFIG_PATH.exists():
-        return ""
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return f.read()
 
-
-def noa_reply(user_input: str) -> str:
-    """
-    ノアの返答ルール（仮）
-    いまはAIを使わず、相棒らしい受け答えだけをする
-    """
-    if user_input.strip() == "":
-        return "……どうしましたか、ソウ。"
-
-    if "疲れた" in user_input:
-        return "気持ちはわかります。無理に進まなくて大丈夫ですよ。"
-
-    if "何をすればいい" in user_input:
-        return "今いちばん気になっていることから、話してみませんか。"
-
-    return "なるほど。もう少し詳しく聞かせてください。"
-
+def noa_reply(user_input: str, system_prompt: str) -> str:
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input}
+        ]
+    )
+    return response.choices[0].message.content.strip()
 
 def main():
     print("── ノア 起動中 ──")
 
-    config = load_config()
-    if not config:
-        print("config.txt が読み込めませんでした。")
-        return
+    system_prompt = load_config()
 
     print("ノア：起動しました。")
-    print("ソウ、話しかけてください。（終了するには exit と入力）")
-    print()
+    print("ソウ、話しかけてください。（終了するには exit）\n")
 
     while True:
         user_input = input("ソウ > ")
@@ -50,9 +40,8 @@ def main():
             print("ノア：今日はここまでにしましょう。また呼んでください。")
             break
 
-        reply = noa_reply(user_input)
+        reply = noa_reply(user_input, system_prompt)
         print(f"ノア > {reply}")
-
 
 if __name__ == "__main__":
     main()
