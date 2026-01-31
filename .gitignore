@@ -1,4 +1,10 @@
 # macOS
-
 .DS_Store
 
+# Environment variables
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
