@@ -20,3 +20,6 @@ data/
 # ===== Optional logs (将来用) =====
 logs/
 *.log
+
+config.txt
+config.txt
