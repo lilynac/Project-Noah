@@ -1,14 +1,22 @@
-# macOS
-.DS_Store
+# ===== Python =====
+__pycache__/
+*.py[cod]
 
-# Environment variables
+# ===== Virtual Env =====
+.venv/
+venv/
+
+# ===== OS / Editor =====
+.DS_Store
+.idea/
+.vscode/
+
+# ===== Environment =====
 .env
 
-# Python
-.venv/
-__pycache__/
-*.pyc
+# ===== Runtime Data (Noah memory & logs) =====
+data/
 
-config.txt
-memory/
-
+# ===== Optional logs (将来用) =====
+logs/
+*.log
