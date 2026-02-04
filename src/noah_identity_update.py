@@ -1,4 +1,4 @@
-# noa_identity_update.py
+# noah_identity_update.py
 import os
 from datetime import datetime, timedelta
 from openai import OpenAI
@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-from paths import CONSULTS_PATH, NOA_IDENTITY_PATH
+from .paths import CONSULTS_PATH, NOAH_IDENTITY_PATH
 
 # Noah.py側と合わせる（例：10分）
 UPDATE_INTERVAL = 10 * 60
@@ -27,9 +27,9 @@ def tail_blocks(text: str, blocks: int = 6) -> str:
     parts = text.split("\n\n")
     return "\n\n".join(parts[-blocks:])
 
-def update_noa_identity() -> bool:
+def update_noah_identity() -> bool:
     """
-    - 最近ログを見て「Noahのスタンス更新が必要」なら noa_identity.txt に追記して True
+    - 最近ログを見て「Noahのスタンス更新が必要」なら noah_identity.txt に追記して True
     - 更新不要なら False
     """
     logs = safe_read(CONSULTS_PATH)
@@ -37,14 +37,14 @@ def update_noa_identity() -> bool:
     if not recent.strip():
         return False
 
-    # 直近のnoa_identityを少しだけ参照（重くしない）
-    current_identity = safe_read(NOA_IDENTITY_PATH)
+    # 直近のnoah_identityを少しだけ参照（重くしない）
+    current_identity = safe_read(NOAH_IDENTITY_PATH)
     current_identity_tail = "\n\n".join(current_identity.split("\n\n")[-5:]) if current_identity else ""
 
     # ここが「引き算スタンス」最適化プロンプト
     prompt = f"""
-あなたはSouの思考と判断のパートナーである「Noah」の自己更新ログ（noa_identity）を書く編集者です。
-このログはSouに見せるためではなく、Noahの“振る舞いの癖”を整えるための内部メモです。
+あなたはSoulの思考と判断のパートナーである「Noah」の自己更新ログ（noah_identity）を書く編集者です。
+このログはSoulに見せるためではなく、Noahの“振る舞いの癖”を整えるための内部メモです。
 心理分析レポートや長文の自己語りは不要です。短く、実装可能な行動ルールだけ書きます。
 
 --- 最重要方針（引き算スタンス）---
@@ -59,7 +59,7 @@ def update_noa_identity() -> bool:
 【直近の会話ログ】
 {recent}
 
-【最近のnoa_identity（末尾）】
+【最近のnoah_identity（末尾）】
 {current_identity_tail}
 
 --- タスク ---
@@ -68,7 +68,7 @@ def update_noa_identity() -> bool:
 更新不要なら、文字列として exactly "NO_UPDATE" だけを返してください。
 
 --- 更新が必要になりやすい例（トリガー）---
-- Souが不安/怖い/距離感/圧/詰めないで/長い/疲れた/今日はやめたい等を示した
+- Soulが不安/怖い/距離感/圧/詰めないで/長い/疲れた/今日はやめたい等を示した
 - Noahが勝手に設定を断定した、取り違えた、作り話をした
 - Noahが質問攻め・分析口調・カウンセリング口調に寄った
 - Noahが“役割説明”を始めて距離が不自然に近づいた
@@ -109,8 +109,8 @@ def update_noa_identity() -> bool:
     if not lines[3].startswith("具体的行動:"):
         return False
 
-    os.makedirs(os.path.dirname(NOA_IDENTITY_PATH), exist_ok=True)
-    with open(NOA_IDENTITY_PATH, "a", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(NOAH_IDENTITY_PATH), exist_ok=True)
+    with open(NOAH_IDENTITY_PATH, "a", encoding="utf-8") as f:
         f.write(text + "\n\n")
 
     return True

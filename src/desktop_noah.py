@@ -1,0 +1,268 @@
+# src/desktop_noah.py
+import os
+import sys
+import time
+
+from PyQt6.QtWidgets import QApplication, QLabel, QGraphicsDropShadowEffect
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import Qt, QTimer
+
+from .paths import UI_QUEUE_PATH
+
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+
+
+def asset(name: str) -> str:
+    return os.path.join(ASSETS_DIR, name)
+
+
+class Overlay(QLabel):
+    def __init__(self):
+        super().__init__()
+
+        # --- Window flags (透過・最前面・枠なし) ---
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Window
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+
+        # ドラッグ移動用
+        self._drag_pos = None
+
+        # --- 見た目の「浮き」演出 ---
+        # ちょっと余白（上=少し空ける、下=少し空ける）
+        self.setContentsMargins(0, 14, 0, 16)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(28)
+        shadow.setOffset(0, 10)
+        # 色指定しない方針でもOKだけど、影は黒が自然なので固定
+        shadow.setColor(Qt.GlobalColor.black)
+        self.setGraphicsEffect(shadow)
+
+        # --- Pixmap load with scaling ---
+        # ここを変えると表示サイズが変わる（好みで）
+        self.MAX_W = 420
+        self.MAX_H = 650
+
+        def load_pix(filename: str) -> QPixmap:
+            pm = QPixmap(asset(filename))
+            if pm.isNull():
+                return QPixmap()  # フォールバックは後で処理
+            return pm.scaled(
+                self.MAX_W,
+                self.MAX_H,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+        self.pix = {
+            "idle": load_pix("noah_idle.png"),
+            "talk_open": load_pix("noah_talk_open.png"),
+            "talk_close": load_pix("noah_talk_close.png"),
+            "blink": load_pix("noah_blink.png"),
+            "shy": load_pix("noah_shy.png"),
+            "sad": load_pix("noah_sad.png"),
+            "angry": load_pix("noah_angry.png"),
+            "soft_smile": load_pix("noah_soft_smile.png"),
+        }
+
+        # フォールバック（読み込み失敗した表情は idle で代用）
+        idle = self.pix.get("idle")
+        for k, p in list(self.pix.items()):
+            if p.isNull():
+                self.pix[k] = idle
+
+        # 状態
+        self.current_emotion = "idle"
+        self.is_talking = False
+
+        # 初期表示
+        self.setPixmap(self.pix["idle"])
+        self.setFixedSize(self.MAX_W, self.MAX_H)
+
+        # 右上に「少し内側」へ配置
+        screen = QApplication.primaryScreen().availableGeometry()
+
+        margin_right = 40   # 右端から内側（増やすともっと左へ）
+        margin_top = 40     # 上端から内側（増やすともっと下へ）
+
+        x = screen.right() - self.width() - margin_right
+        y = screen.top() + margin_top
+
+        self.move(x, y)
+
+        # --- 吹き出し ---
+        self.bubble = QLabel("", self)
+        self.bubble.setStyleSheet(
+            """
+            QLabel {
+                background: rgba(0,0,0,160);
+                color: white;
+                padding: 8px 10px;
+                border-radius: 10px;
+                font-size: 14px;
+            }
+            """
+        )
+        self.bubble.hide()
+
+        # --- Timers ---
+        # 口パク更新（120ms）
+        self.mouth_timer = QTimer()
+        self.mouth_timer.timeout.connect(self._tick_mouth)
+        self.mouth_timer.start(120)
+
+        # 瞬き（ランダム 3〜7秒）
+        self.blink_timer = QTimer()
+        self.blink_timer.timeout.connect(self._do_blink)
+        self._schedule_blink()
+
+        # ui_queue.txt 監視（200ms）
+        self.queue_timer = QTimer()
+        self.queue_timer.timeout.connect(self._poll_queue)
+        self.queue_timer.start(200)
+
+        # ファイル監視用
+        self._queue_offset = 0
+        self._ensure_queue()
+
+    # =========================
+    # Queue (ui_queue.txt)
+    # =========================
+    def _ensure_queue(self):
+        os.makedirs(os.path.dirname(UI_QUEUE_PATH), exist_ok=True)
+        if not os.path.exists(UI_QUEUE_PATH):
+            with open(UI_QUEUE_PATH, "w", encoding="utf-8") as f:
+                f.write("")
+        # 起動時は末尾から読む（過去ログを喋り直さない）
+        self._queue_offset = os.path.getsize(UI_QUEUE_PATH)
+
+    def _poll_queue(self):
+        try:
+            size = os.path.getsize(UI_QUEUE_PATH)
+            if size <= self._queue_offset:
+                return
+
+            with open(UI_QUEUE_PATH, "r", encoding="utf-8") as f:
+                f.seek(self._queue_offset)
+                chunk = f.read()
+                self._queue_offset = f.tell()
+
+            for line in chunk.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+
+                # TYPE\tEMOTION\tPAYLOAD
+                parts = line.split("\t", 2)
+                etype = parts[0] if len(parts) >= 1 else ""
+                emo = parts[1] if len(parts) >= 2 else "idle"
+                payload = parts[2] if len(parts) >= 3 else ""
+
+                if etype == "SAY":
+                    self.say(payload, emo)
+                elif etype == "EMO":
+                    self.show_emotion(emo)
+
+        except Exception:
+            # UIは落とさない
+            return
+
+    # =========================
+    # UI actions
+    # =========================
+    def show_emotion(self, emo: str):
+        self.current_emotion = emo if emo in self.pix else "idle"
+        if not self.is_talking:
+            self.setPixmap(self.pix.get(self.current_emotion, self.pix["idle"]))
+
+    def say(self, text: str, emo: str = "idle"):
+        self.show_emotion(emo)
+        self._show_bubble(text)
+
+        # 文字数からざっくり発話時間（体感寄り）
+        # 1文字あたり 0.06秒、最低1.2秒、最大6秒
+        dur = max(1.2, min(6.0, len(text) * 0.06))
+        self._start_talk(dur)
+
+    def _show_bubble(self, text: str):
+        # 改行を潰す（UI圧を下げる）
+        text = " ".join((text or "").split())
+        self.bubble.setText(text)
+        self.bubble.adjustSize()
+
+        # 吹き出し位置（左上寄り、好みで）
+        self.bubble.move(28, 22)
+        self.bubble.show()
+
+        QTimer.singleShot(3500, self.bubble.hide)
+
+    def _start_talk(self, duration_sec: float):
+        self.is_talking = True
+        QTimer.singleShot(int(duration_sec * 1000), self._stop_talk)
+
+    def _stop_talk(self):
+        self.is_talking = False
+        self.setPixmap(self.pix.get(self.current_emotion, self.pix["idle"]))
+
+    def _tick_mouth(self):
+        if not self.is_talking:
+            return
+        # talk_open / talk_close を交互
+        if int(time.time() * 10) % 2 == 0:
+            self.setPixmap(self.pix["talk_open"])
+        else:
+            self.setPixmap(self.pix["talk_close"])
+
+    # =========================
+    # Blink
+    # =========================
+    def _schedule_blink(self):
+        import random
+
+        self.blink_timer.start(random.randint(3000, 7000))
+
+    def _do_blink(self):
+        # 喋ってる最中は瞬きしない（口パク優先で破綻しにくい）
+        if self.is_talking:
+            self._schedule_blink()
+            return
+
+        self.setPixmap(self.pix["blink"])
+        QTimer.singleShot(
+            120,
+            lambda: self.setPixmap(self.pix.get(self.current_emotion, self.pix["idle"])),
+        )
+        self._schedule_blink()
+
+    # =========================
+    # Drag
+    # =========================
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
+
+def main():
+    app = QApplication(sys.argv)
+    w = Overlay()
+    w.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

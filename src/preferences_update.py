@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-from paths import PREFERENCES_PATH, PREFERENCES_HISTORY_PATH, CONSULTS_PATH
+from .paths import PREFERENCES_PATH, PREFERENCES_HISTORY_PATH, CONSULTS_PATH
 
 # =========================
 # Utilities
@@ -68,7 +68,7 @@ def update_preferences() -> bool:
         return False
 
     prompt = f"""
-あなたは Sou の思考負荷を下げるために
+あなたは Soul の思考負荷を下げるために
 preferences.txt を最小化・最適化する編集者です。
 
 【重要ルール】
@@ -79,7 +79,7 @@ preferences.txt を最小化・最適化する編集者です。
 - 変更不要なら "NO_UPDATE" とだけ返す
 
 【トリガー例】
-- Sou が「重い」「長い」「そこまで求めてない」等を示した
+- Soul が「重い」「長い」「そこまで求めてない」等を示した
 - ルールが厳しすぎて会話が不自然になった
 - Noah がルールを守るために迷っている様子が出た
 

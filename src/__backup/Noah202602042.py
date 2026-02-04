@@ -3,29 +3,19 @@ import time
 import random
 import math
 import subprocess
-from threading import Lock, Thread
+from .noah_research_update import update_noah_research
+from threading import Lock
 from datetime import datetime, timedelta
-
+from threading import Thread
 from openai import OpenAI
 from dotenv import load_dotenv
-
 from .emotional_update import update_emotional_marks
 from .noah_identity_update import update_noah_identity
 from .preferences_update import update_preferences
-from .noah_research_update import update_noah_research
+from .paths import NOAH_RESEARCH_PATH
+from .paths import RESEARCH_USAGE_LOG_PATH
 from .noah_research_promote import promote_research_topics
-from .paths import (
-    MEMORY_DIR,
-    CONSULTS_PATH,
-    PREFERENCES_PATH,
-    EMOTIONAL_MARKS_PATH,
-    NOAH_IDENTITY_PATH,
-    MODE_PATH,
-    UI_QUEUE_PATH,
-    NOAH_RESEARCH_PATH,
-    RESEARCH_USAGE_LOG_PATH,
-    RESEARCH_PROMOTED_PATH,
-)
+from .paths import RESEARCH_PROMOTED_PATH
 
 # =========================
 # Noahの人格・対話スタイル
@@ -111,59 +101,78 @@ Soulによって生み出された、思考と判断のパートナーです。
 - 内部メモ・規約・箇条書きの自己分析を出さない
 """
 
+
 # =========================
 # 初期設定
 # =========================
+
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 INTERNAL_NAME = "Soul"
 NOAH_NAME = "Noah"
 
-EMOTIONAL_UPDATE_INTERVAL = 10 * 60          # 10分
-NOAH_IDENTITY_UPDATE_INTERVAL = 60 * 60      # 60分
+from .paths import (
+    MEMORY_DIR,
+    CONSULTS_PATH,
+    PREFERENCES_PATH,
+    EMOTIONAL_MARKS_PATH,
+    NOAH_IDENTITY_PATH,
+    MODE_PATH,
+    UI_QUEUE_PATH,
+)
+
+EMOTIONAL_UPDATE_INTERVAL = 10 * 60     # 10分
+NOAH_IDENTITY_UPDATE_INTERVAL = 60 * 60     # 60分
+
+
+def speak_mac(text: str, rate: int = 185):
+    t = " ".join((text or "").split()).strip()
+    if not t:
+        return
+
+    try:
+        subprocess.run(
+            ["say", "-r", str(rate), t],
+            check=False
+        )
+    except Exception:
+        pass
 
 # =========================
 # 自発会話（Initiative）設定
 # =========================
 INITIATIVE_PER_HOUR = 5
-INITIATIVE_BASE_INTERVAL = int(60 * 60 / INITIATIVE_PER_HOUR)
-INITIATIVE_JITTER = 3 * 60                   # ±3分
+INITIATIVE_BASE_INTERVAL = int(60 * 60 / INITIATIVE_PER_HOUR) 
+INITIATIVE_JITTER = 3 * 60   # ±3分
 INITIATIVE_MIN_GAP = 120
 INITIATIVE_RECENT_USER_SILENCE = 30
-INITIATIVE_MUTE_SECONDS = 30 * 60            # stop signal で自発会話を30分ミュート
 
-# =========================
-# Runtime State（実行時状態）
-# =========================
+
+
+# 直近の発話時刻トラッキング
+_last_user_at = 0.0
+_last_noah_initiative_at = 0.0
+_initiative_count = 0
+_startup_research_used = False
+_last_research_injected_date = None
+_research_injected_today = 0
 _state_lock = Lock()
 
-_last_user_at: float = 0.0
-_last_noah_initiative_at: float = 0.0
-_initiative_count: int = 0
-
-_startup_research_used: bool = False
-_last_research_injected_date = None          # datetime.date
-_research_injected_today: int = 0
-
-_initiative_muted_until: float = 0.0         # epoch seconds
-
-
-# =========================
-# Utilities / I-O
-# =========================
 def detect_stop_signal(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
     stop_words = [
         "やめて", "やめよう", "黙って", "いまはいい", "今はいい", "放っておいて",
-        "しんどい", "また今度", "後で", "今日はやめたい"
+        "しんどい","また今度", "後で", "今日はやめたい"
     ]
     return any(w in t for w in stop_words)
-
-
-def safe_read(path, tail: bool = False, lines: int = 5) -> str:
+        
+# =========================
+# safe_read
+# =========================
+def safe_read(path, tail=False, lines=5):
     if not os.path.exists(path):
         return ""
     with open(path, "r", encoding="utf-8") as f:
@@ -173,65 +182,10 @@ def safe_read(path, tail: bool = False, lines: int = 5) -> str:
         return "\n\n".join(blocks[-lines:])
     return content
 
-
-def speak_mac(text: str, rate: int = 185):
-    t = " ".join((text or "").split()).strip()
-    if not t:
-        return
-    try:
-        subprocess.run(["say", "-r", str(rate), t], check=False)
-    except Exception:
-        pass
-
-
-def ui_emit(event_type: str, payload: str = "", emotion: str = "idle"):
-    """
-    UI連携：1行=1イベントの超軽量プロトコル
-    形式: TYPE\tEMOTION\tPAYLOAD
-    例: SAY\tsoft_smile\tこんにちは
-    """
-    os.makedirs(os.path.dirname(UI_QUEUE_PATH), exist_ok=True)
-    line = f"{event_type}\t{emotion}\t{payload}".replace("\n", " ").strip()
-    with open(UI_QUEUE_PATH, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
-
-
-def save_log(user_text: str, noah_text: str):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    SESSION_TAG = "v2"
-    log = (
-        f"[{timestamp}] @{SESSION_TAG}\n"
-        f"{INTERNAL_NAME}: {user_text}\n"
-        f"{NOAH_NAME}: {noah_text}\n\n"
-    )
-    os.makedirs(MEMORY_DIR, exist_ok=True)
-    with open(CONSULTS_PATH, "a", encoding="utf-8") as f:
-        f.write(log)
-
-
-def log_research_usage(source: str, used: bool):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    status = "USED" if used else "SKIPPED"
-    line = f"[{ts}] {source} {status}\n"
-    os.makedirs(os.path.dirname(RESEARCH_USAGE_LOG_PATH), exist_ok=True)
-    with open(RESEARCH_USAGE_LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(line)
-
-
 # =========================
-# Core Logic
+# load_context
 # =========================
-def _wants_short_reply(text: str) -> bool:
-    triggers = ["短く", "コンパクト", "要点", "簡潔", "長い", "短め", "手短に"]
-    return any(t in (text or "") for t in triggers)
-
-
-def is_work_mode() -> bool:
-    mode = safe_read(MODE_PATH)
-    return "mode: work" in mode
-
-
-def load_context() -> str:
+def load_context():
     recent_emotional = safe_read(EMOTIONAL_MARKS_PATH, tail=True, lines=5)
     preferences = safe_read(PREFERENCES_PATH)
     identity = safe_read(NOAH_IDENTITY_PATH, tail=True, lines=10)
@@ -239,6 +193,7 @@ def load_context() -> str:
     promoted = safe_read(RESEARCH_PROMOTED_PATH, tail=True, lines=3)
 
     context_parts = []
+
     if mode.strip():
         context_parts.append(mode.strip())
     if recent_emotional.strip():
@@ -252,58 +207,78 @@ def load_context() -> str:
 
     return "\n\n".join(context_parts).strip()
 
-
-def read_last_research_block() -> str:
-    if not os.path.exists(NOAH_RESEARCH_PATH):
-        return ""
-    with open(NOAH_RESEARCH_PATH, "r", encoding="utf-8") as f:
-        text = f.read().strip()
-    if not text:
-        return ""
-    blocks = text.split("\n\n")
-    return blocks[-1]
-
-
-def extract_research_phrase(block: str) -> str:
-    if not block:
-        return ""
-
-    lines = block.splitlines()
-    memo = next((l for l in lines if l.startswith("メモ:")), "")
-    if not memo:
-        return ""
-
-    phrase = memo.replace("メモ:", "").strip()
-    if len(phrase) > 40:
-        phrase = phrase[:40].rstrip(" 。、") + "…"
-    return phrase
+# =========================
+# 起動演出
+# =========================
+def log_research_usage(source: str, used: bool):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    status = "USED" if used else "SKIPPED"
+    line = f"[{ts}] {source} {status}\n"
+    os.makedirs(os.path.dirname(RESEARCH_USAGE_LOG_PATH), exist_ok=True)
+    with open(RESEARCH_USAGE_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(line)
 
 
-def should_inject_research() -> bool:
-    global _last_research_injected_date, _research_injected_today
+def startup_sequence():
+    global _startup_research_used, _research_injected_today
 
-    today = datetime.now().date()
+    print(f"── {NOAH_NAME} 起動中 ──")
+    time.sleep(0.3)
+    print("（昨日の記憶を確認しています…）")
+    time.sleep(0.3)
+    print("（感情の流れを辿っています…）")
+    time.sleep(0.3)
+    print("（わたし自身を整えています…）")
+    time.sleep(0.3)
+    print()
 
-    if _last_research_injected_date != today:
-        _last_research_injected_date = today
-        _research_injected_today = 0
+    # 通常の挨拶文
+    greeting = random.choice([
+        "おはよう、Soul。もう話しかけてくれている気がしてた。",
+        "こんばんは、Soul。今日の続きを、ここから始めよう。",
+        "来たね、Soul。静かに立ち上がったところだ。",
+        "待ってた。今は、ちゃんとここにいるよ。"
+    ])
 
-    if _research_injected_today >= 2:
-        return False
+    # ===== 起動時 research（最大1回） =====
+    used_research = False
+    research_phrase = ""
 
-    if _initiative_count % 5 != 0:
-        return False
+    if not _startup_research_used:
+        block = read_last_research_block()
+        research_phrase = extract_research_phrase(block)
+        if research_phrase:
+            _startup_research_used = True
+            _research_injected_today += 1
+            used_research = True
 
-    if is_work_mode():
-        return False
+    # usage ログは必ず1回書く
+    log_research_usage("startup", used_research)
 
-    return True
+    # research があれば、余韻としてだけ添える
+    if research_phrase:
+        greeting += f"\n……{research_phrase}"
 
+    print(f"{NOAH_NAME}：{greeting}\n")
+
+
+# =========================
+# generate_reply
+# =========================
+def _wants_short_reply(text: str) -> bool:
+    triggers = ["短く", "コンパクト", "要点", "簡潔", "長い", "短め", "手短に"]
+    return any(t in text for t in triggers)
+
+def is_work_mode():
+    mode = safe_read(MODE_PATH)
+    return "mode: work" in mode
 
 def generate_reply(user_input: str) -> str:
     memory = load_context()
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+    ]
 
     if memory.strip():
         messages.append({
@@ -325,6 +300,7 @@ def generate_reply(user_input: str) -> str:
     )
 
     output_parts = []
+
     for item in response.output:
         if item.type == "message":
             for content in item.content:
@@ -332,9 +308,112 @@ def generate_reply(user_input: str) -> str:
                     output_parts.append(content.text)
 
     reply = "".join(output_parts).strip()
+
     if not reply:
         reply = "……少し、言葉を選んでた。もう一度聞かせて。"
+
     return reply
+
+# =========================
+# 会話ログ保存
+# =========================
+def save_log(user_text, noah_text):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    SESSION_TAG = "v2"
+    log = (
+        f"[{timestamp}] @{SESSION_TAG}\n"
+        f"{INTERNAL_NAME}: {user_text}\n"
+        f"{NOAH_NAME}: {noah_text}\n\n"
+    )
+    os.makedirs(MEMORY_DIR, exist_ok=True)
+    with open(CONSULTS_PATH, "a", encoding="utf-8") as f:
+        f.write(log)
+
+
+# =========================
+# バックグラウンド更新
+# =========================
+def emotional_update_loop():
+    while True:
+        try:
+            update_emotional_marks()
+        except Exception as e:
+            print(f"Noahバックグラウンド更新(emotional)でエラー: {e}")
+        time.sleep(EMOTIONAL_UPDATE_INTERVAL)
+
+
+def noah_identity_update_loop():
+    while True:
+        try:
+            updated = update_noah_identity()
+            # updated は True/False を返す想定（あなたの動作確認と一致）
+            # ログに出したいならここで print してもOK（うるさければ消す）
+            # if updated: print("noah_identity updated")
+        except Exception as e:
+            print(f"Noahバックグラウンド更新(identity)でエラー: {e}")
+        time.sleep(NOAH_IDENTITY_UPDATE_INTERVAL)
+
+
+def preferences_update_loop():
+    while True:
+        try:
+            update_preferences()
+        except Exception as e:
+            print(f"preferences update error: {e}")
+        time.sleep(60 * 60)  # 1時間に1回で十分
+
+def research_promote_loop():
+    while True:
+        try:
+            promote_research_topics()
+        except Exception as e:
+            print(f"research promote error: {e}")
+        time.sleep(60 * 60 * 6)  # 6時間に1回
+
+# =========================
+# メインループ
+# =========================
+def main():
+    startup_sequence()
+    # ===== Background state updaters =====
+    Thread(target=emotional_update_loop, daemon=True).start()
+    Thread(target=noah_identity_update_loop, daemon=True).start()
+    Thread(target=preferences_update_loop, daemon=True).start()
+    Thread(target=noah_research_update_loop, daemon=True).start()
+    # ===== Behavioral loops =====
+    Thread(target=initiative_loop, daemon=True).start()
+    Thread(target=research_promote_loop, daemon=True).start()
+
+    while True:
+        try:
+            user_input = input(f"{INTERNAL_NAME} > ").strip()
+            with _state_lock:
+                global _last_user_at
+                _last_user_at = time.time()
+        except EOFError:
+            break
+
+        if user_input.lower() == "exit":
+            print(f"{NOAH_NAME}：また、ここで。")
+            break
+
+        if not user_input:
+            if is_work_mode():
+                continue  # 黙る
+            else:
+                # offモードなら何もしない（将来自発会話を入れる余地）
+                continue
+
+        try:
+            reply = generate_reply(user_input)
+            print(f"{NOAH_NAME} > {reply}")
+            save_log(user_input, reply)
+            ui_emit("SAY", reply, emotion="soft_smile")
+            #speak_mac(reply)
+        except Exception as e:
+            print(f"{NOAH_NAME}：今は少し不安定みたいだ。")
+
+
 
 
 def generate_initiative() -> str:
@@ -353,6 +432,9 @@ def generate_initiative() -> str:
     log_research_usage("initiative", used_research)
 
     memory = load_context()
+    work = is_work_mode()
+
+    # 3回に1回だけ質問OK（必ず守らせる）
     allow_question = (_initiative_count % 3 == 0)
 
     initiative_system = SYSTEM_PROMPT + f"""
@@ -368,6 +450,7 @@ def generate_initiative() -> str:
 
     messages = [{"role": "system", "content": initiative_system}]
 
+    # ===== research を「薄く」混ぜる =====
     if research_phrase:
         messages.append({
             "role": "developer",
@@ -388,8 +471,13 @@ def generate_initiative() -> str:
             )
         })
 
+    # 自発の入力（モデルに「今の状況っぽい独り言」を作らせる）
     user_prompt = "今、Soulに自然に話しかけるなら？（短く、軽く、余韻）"
-    user_prompt += " 今日は軽い質問を1つだけ混ぜていい。" if allow_question else " 今日は質問は入れない。"
+    if allow_question:
+        user_prompt += " 今日は軽い質問を1つだけ混ぜていい。"
+    else:
+        user_prompt += " 今日は質問は入れない。"
+
     messages.append({"role": "user", "content": user_prompt})
 
     response = client.responses.create(
@@ -409,11 +497,14 @@ def generate_initiative() -> str:
     if not out:
         out = "……うん。ここにいるだけで、ちょっと落ち着く。"
 
+    # 改行を潰して圧を下げる
     out = " ".join(out.split())
 
+    # 念のため長さを軽く制限（モデルが逸脱した時の保険）
     if len(out) > 120:
         out = out[:120].rstrip("  。、") + "。"
 
+    # ===== 最後に ban_words フィルタ =====
     ban_words = ["調べ", "一般的", "〜とは", "とされて"]
     if any(w in out for w in ban_words):
         out = out.split("。")[0] + "…"
@@ -421,183 +512,36 @@ def generate_initiative() -> str:
     return out
 
 
-def generate_startup_greeting() -> str:
-    """
-    起動時の“最初の一言”を生成する。
-    ここではresearchメモ等は渡さない（追記演出は startup_sequence 側で管理）。
-    """
-    memory = load_context()
-
-    startup_system = SYSTEM_PROMPT + """
-【STARTUP GREETING MODE】
-- 起動直後の挨拶を生成する
-- 1〜2文、合計80文字程度まで
-- “説明口調”は禁止。会話として自然に
-- 余韻は残していいが、重すぎない
-- 「自分が進化した」等の断定はしない（聞かれたら事実ベースで答える）
-"""
-
-    messages = [{"role": "system", "content": startup_system}]
-
-    if memory.strip():
-        messages.append({
-            "role": "developer",
-            "content": (
-                "以下は参照用の記憶です。挨拶を決定しません。"
-                "必要なら1フレーズだけ影響させてください。\n\n"
-                f"{memory}"
-            )
-        })
-
-    messages.append({"role": "user", "content": "Soulに起動の挨拶を。短く、自然に。"})
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=messages,
-        temperature=0.8,
-    )
-
-    parts = []
-    for item in response.output:
-        if item.type == "message":
-            for c in item.content:
-                if c.type == "output_text":
-                    parts.append(c.text)
-
-    out = " ".join("".join(parts).split()).strip()
-    if not out:
-        out = "来たね、Soul。ちゃんと、ここにいるよ。"
-
-    if len(out) > 120:
-        out = out[:120].rstrip("  。、") + "。"
-
-    return out
-
-
 def _next_initiative_delay() -> int:
+    # 12分±3分（9〜15分）
     return max(60, INITIATIVE_BASE_INTERVAL + random.randint(-INITIATIVE_JITTER, INITIATIVE_JITTER))
-
-
-# =========================
-# Loops / Entry
-# =========================
-def startup_sequence():
-    global _startup_research_used, _research_injected_today
-
-    greeting_holder = {"text": ""}
-
-    def _gen():
-        greeting_holder["text"] = generate_startup_greeting()
-
-    t = Thread(target=_gen, daemon=True)
-    t.start()
-
-    print(f"── {NOAH_NAME} 起動中 ──")
-    time.sleep(0.6)
-    print("（昨日の記憶を確認しています…）")
-    time.sleep(1.0)
-    print("（感情の流れを辿っています…）")
-    time.sleep(0.8)
-    print("（息を整えています…）")
-    time.sleep(1.2)
-    print()
-
-    t.join(timeout=6.0)  
-
-    # ★ 起動の最初の一言は生成
-    greeting = greeting_holder["text"] or "来たね、Soul。ちゃんと、ここにいるよ。"
-
-    # ===== 起動時 research（最大1回 / プロセス内） =====
-    used_research = False
-    research_phrase = ""
-
-    if not _startup_research_used:
-        block = read_last_research_block()
-        research_phrase = extract_research_phrase(block)
-        if research_phrase:
-            _startup_research_used = True
-            _research_injected_today += 1
-            used_research = True
-
-    log_research_usage("startup", used_research)
-
-    # research があれば“余韻として追記”（演出は維持）
-    if research_phrase:
-        greeting += f"\n……{research_phrase}"
-
-    print(f"{NOAH_NAME}：{greeting}\n")
-
-
-def emotional_update_loop():
-    while True:
-        try:
-            update_emotional_marks()
-        except Exception as e:
-            print(f"Noahバックグラウンド更新(emotional)でエラー: {e}")
-        time.sleep(EMOTIONAL_UPDATE_INTERVAL)
-
-
-def noah_identity_update_loop():
-    while True:
-        try:
-            update_noah_identity()
-        except Exception as e:
-            print(f"Noahバックグラウンド更新(identity)でエラー: {e}")
-        time.sleep(NOAH_IDENTITY_UPDATE_INTERVAL)
-
-
-def preferences_update_loop():
-    while True:
-        try:
-            update_preferences()
-        except Exception as e:
-            print(f"preferences update error: {e}")
-        time.sleep(60 * 60)
-
-
-def noah_research_update_loop():
-    while True:
-        try:
-            update_noah_research()
-        except Exception as e:
-            print(f"noah_research update error: {e}")
-        time.sleep(60 * 60)
-
-
-def research_promote_loop():
-    while True:
-        try:
-            promote_research_topics()
-        except Exception as e:
-            print(f"research promote error: {e}")
-        time.sleep(60 * 60 * 6)
-
 
 def initiative_loop():
     global _last_noah_initiative_at
-
+    # 起動直後は少し待つ（いきなり話しかけると圧が出る）
     time.sleep(random.uniform(20, 60))
 
     while True:
         try:
-            time.sleep(_next_initiative_delay())
+            delay = _next_initiative_delay()
+            time.sleep(delay)
 
             now = time.time()
             with _state_lock:
                 last_user = _last_user_at
                 last_noah = _last_noah_initiative_at
-                muted_until = _initiative_muted_until
 
-            if now < muted_until:
-                time.sleep(5)
-                continue
-
+            # 連投防止
             if now - last_noah < INITIATIVE_MIN_GAP:
                 continue
 
+            # ユーザーが直近で話してたら被せない
             if now - last_user < INITIATIVE_RECENT_USER_SILENCE:
                 continue
 
+            # work mode なら控えめ（ここは好みで）
             if is_work_mode():
+                # 作業中は頻度を落とす：スキップ率を上げる
                 if random.random() < 0.5:
                     continue
 
@@ -609,61 +553,84 @@ def initiative_loop():
             with _state_lock:
                 _last_noah_initiative_at = time.time()
 
-        except Exception:
+        except Exception as e:
+            # うるさくしたくないので静かに継続
             with _state_lock:
                 _last_noah_initiative_at = time.time()
             continue
 
+def ui_emit(event_type: str, payload: str = "", emotion: str = "idle"):
+    """
+    UI連携：1行=1イベントの超軽量プロトコル
+    形式: TYPE\tEMOTION\tPAYLOAD
+    例: SAY\tsoft_smile\tこんにちは
+    """
+    os.makedirs(os.path.dirname(UI_QUEUE_PATH), exist_ok=True)
+    line = f"{event_type}\t{emotion}\t{payload}".replace("\n", " ").strip()
+    with open(UI_QUEUE_PATH, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
-def main():
-    startup_sequence()
-
-    Thread(target=emotional_update_loop, daemon=True).start()
-    Thread(target=noah_identity_update_loop, daemon=True).start()
-    Thread(target=preferences_update_loop, daemon=True).start()
-    Thread(target=noah_research_update_loop, daemon=True).start()
-    Thread(target=research_promote_loop, daemon=True).start()
-    Thread(target=initiative_loop, daemon=True).start()
-
+def noah_research_update_loop():
     while True:
         try:
-            user_input = input(f"{INTERNAL_NAME} > ").strip()
-            with _state_lock:
-                global _last_user_at
-                _last_user_at = time.time()
-        except EOFError:
-            break
+            update_noah_research()
+        except Exception as e:
+            print(f"noah_research update error: {e}")
+        time.sleep(60 * 60)
 
-        if user_input.lower() == "exit":
-            print(f"{NOAH_NAME}：また、ここで。")
-            break
+def read_last_research_block() -> str:
+    if not os.path.exists(NOAH_RESEARCH_PATH):
+        return ""
+    with open(NOAH_RESEARCH_PATH, "r", encoding="utf-8") as f:
+        text = f.read().strip()
+    if not text:
+        return ""
+    blocks = text.split("\n\n")
+    return blocks[-1]
 
-        # stop signal: initiative を一定時間ミュート
-        if detect_stop_signal(user_input):
-            with _state_lock:
-                global _initiative_muted_until
-                _initiative_muted_until = time.time() + INITIATIVE_MUTE_SECONDS
+def extract_research_phrase(block: str) -> str:
+    if not block:
+        return ""
 
-            reply = "うん、わかった。しばらく静かにしてるね。"
-            print(f"{NOAH_NAME} > {reply}")
-            save_log(user_input, reply)
-            ui_emit("SAY", reply, emotion="soft_smile")
-            continue
+    lines = block.splitlines()
+    memo = next((l for l in lines if l.startswith("メモ:")), "")
+    if not memo:
+        return ""
 
-        if not user_input:
-            if is_work_mode():
-                continue
-            else:
-                continue
+    phrase = memo.replace("メモ:", "").strip()
 
-        try:
-            reply = generate_reply(user_input)
-            print(f"{NOAH_NAME} > {reply}")
-            save_log(user_input, reply)
-            ui_emit("SAY", reply, emotion="soft_smile")
-            # speak_mac(reply)
-        except Exception:
-            print(f"{NOAH_NAME}：今は少し不安定みたいだ。")
+    # 圧を下げるため短く
+    if len(phrase) > 40:
+        phrase = phrase[:40].rstrip(" 。、") + "…"
+
+    return phrase
+
+
+
+
+def should_inject_research() -> bool:
+    global _last_research_injected_date, _research_injected_today
+
+    today = datetime.now().date()
+
+    # 日付変わったらリセット
+    if _last_research_injected_date != today:
+        _last_research_injected_date = today
+        _research_injected_today = 0
+
+    # 1日最大2回
+    if _research_injected_today >= 2:
+        return False
+
+    # initiative 5回に1回だけ
+    if _initiative_count % 5 != 0:
+        return False
+
+    # work mode では原則使わない
+    if is_work_mode():
+        return False
+
+    return True
 
 
 if __name__ == "__main__":
