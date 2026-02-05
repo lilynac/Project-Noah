@@ -280,23 +280,28 @@ def extract_research_phrase(block: str) -> str:
 
 
 def should_inject_research() -> bool:
-    global _last_research_injected_date, _research_injected_today
+    global _last_research_injected_date, _research_injected_today, _initiative_count
 
     today = datetime.now().date()
 
+    # 日付が変わったらカウンタをリセット
     if _last_research_injected_date != today:
         _last_research_injected_date = today
         _research_injected_today = 0
 
+    # 1日の上限（2回まで）
     if _research_injected_today >= 2:
         return False
 
+    # 5回に1回だけ注入（initiative_loop がカウントを進めた後に呼ばれる想定）
     if _initiative_count % 5 != 0:
         return False
 
+    # workモード中は注入しない
     if is_work_mode():
         return False
 
+    # ここでは「注入してよいか」だけ返す（カウントは実注入時に進める）
     return True
 
 
@@ -316,13 +321,28 @@ def generate_reply(user_input: str) -> str:
             )
         })
 
+    # 「短くして」などの要求を拾う（関数が無い場合は後述の簡易版を追加）
+    short_mode = _wants_short_reply(user_input)
+
+    if short_mode:
+        # システムを壊さない範囲で短文誘導
+        messages.append({"role": "system", "content": "返答は短く、要点だけ。長い説明はしない。"})
+
     messages.append({"role": "user", "content": user_input})
 
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=messages,
-        temperature=0.7,
-    )
+    # 体感として “短くして” が効くように、出力上限も切り替える
+    max_tokens = 120 if short_mode else 350
+
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=messages,
+            temperature=0.7,
+            max_output_tokens=max_tokens,
+        )
+    except Exception:
+        # ネットワーク/一時的エラー時の落ち方を安定させる
+        return "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
 
     output_parts = []
     for item in response.output:
@@ -338,21 +358,29 @@ def generate_reply(user_input: str) -> str:
 
 
 def generate_initiative() -> str:
-    global _initiative_count, _research_injected_today
-    _initiative_count += 1
+    global _initiative_count, _research_injected_today, _last_research_injected_date
 
+    # research は should_inject_research() の判定に従う（実注入時のみカウントを進める）
     research_phrase = ""
     used_research = False
+
     if should_inject_research():
         block = read_last_research_block()
         research_phrase = extract_research_phrase(block)
         if research_phrase:
+            # 実際にphraseが取れた時だけカウント
+            today = datetime.now().date()
+            if _last_research_injected_date != today:
+                _last_research_injected_date = today
+                _research_injected_today = 0
             _research_injected_today += 1
             used_research = True
 
     log_research_usage("initiative", used_research)
 
     memory = load_context()
+
+    # allow_question は「直近のカウント」に基づく（initiative_loop側で +1 済みの想定）
     allow_question = (_initiative_count % 3 == 0)
 
     initiative_system = SYSTEM_PROMPT + f"""
@@ -392,11 +420,15 @@ def generate_initiative() -> str:
     user_prompt += " 今日は軽い質問を1つだけ混ぜていい。" if allow_question else " 今日は質問は入れない。"
     messages.append({"role": "user", "content": user_prompt})
 
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=messages,
-        temperature=0.8,
-    )
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=messages,
+            temperature=0.8,
+            max_output_tokens=180,  # initiativeは短く保つ
+        )
+    except Exception:
+        return "……ねえ。少しだけ、ここにいていい？"
 
     parts = []
     for item in response.output:
@@ -481,7 +513,7 @@ def _next_initiative_delay() -> int:
 # Loops / Entry
 # =========================
 def startup_sequence():
-    global _startup_research_used, _research_injected_today
+    global _startup_research_used, _research_injected_today, _last_research_injected_date
 
     greeting_holder = {"text": ""}
 
@@ -501,7 +533,7 @@ def startup_sequence():
     time.sleep(1.2)
     print()
 
-    t.join(timeout=6.0)  
+    t.join(timeout=6.0)
 
     # ★ 起動の最初の一言は生成
     greeting = greeting_holder["text"] or "来たね、Soul。ちゃんと、ここにいるよ。"
@@ -510,13 +542,22 @@ def startup_sequence():
     used_research = False
     research_phrase = ""
 
+    # 日付が変わっていたら、起動時にも必ずリセット
+    today = datetime.now().date()
+    if _last_research_injected_date != today:
+        _last_research_injected_date = today
+        _research_injected_today = 0
+
     if not _startup_research_used:
-        block = read_last_research_block()
-        research_phrase = extract_research_phrase(block)
-        if research_phrase:
-            _startup_research_used = True
-            _research_injected_today += 1
-            used_research = True
+        # 1日の上限（initiative側と揃える） + workモード中は混ぜない
+        if _research_injected_today < 2 and (not is_work_mode()):
+            block = read_last_research_block()
+            research_phrase = extract_research_phrase(block)
+
+            if research_phrase:
+                _startup_research_used = True
+                _research_injected_today += 1  # 実際にphraseが取れた時だけカウント
+                used_research = True
 
     log_research_usage("startup", used_research)
 
@@ -573,7 +614,7 @@ def research_promote_loop():
 
 
 def initiative_loop():
-    global _last_noah_initiative_at
+    global _last_noah_initiative_at, _initiative_count
 
     time.sleep(random.uniform(20, 60))
 
@@ -587,19 +628,27 @@ def initiative_loop():
                 last_noah = _last_noah_initiative_at
                 muted_until = _initiative_muted_until
 
+            # ミュート中は少し寝てから再判定
             if now < muted_until:
                 time.sleep(5)
                 continue
 
+            # Noah側の発話間隔を守る
             if now - last_noah < INITIATIVE_MIN_GAP:
                 continue
 
+            # ユーザーが最近しゃべってたら割り込まない
             if now - last_user < INITIATIVE_RECENT_USER_SILENCE:
                 continue
 
+            # workモードは控えめに
             if is_work_mode():
                 if random.random() < 0.5:
                     continue
+
+            # ここで「1回分のinitiative」を確定させる（カウンタを進める）
+            with _state_lock:
+                _initiative_count += 1
 
             text = generate_initiative()
             print(f"{NOAH_NAME} > {text}")
@@ -610,8 +659,10 @@ def initiative_loop():
                 _last_noah_initiative_at = time.time()
 
         except Exception:
+            # 例外時に即ループし続けないよう、軽くクールダウン
             with _state_lock:
                 _last_noah_initiative_at = time.time()
+            time.sleep(2.0)
             continue
 
 
