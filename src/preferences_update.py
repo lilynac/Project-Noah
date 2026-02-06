@@ -97,25 +97,16 @@ preferences.txt を最小化・最適化する編集者です。
 NO_UPDATE
 """
 
-    try:
-        resp = client.responses.create(
-            model="gpt-4o-mini",
-            input=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_output_tokens=520,
-        )
-    except Exception as e:
-        print("preferences_update: OpenAI error:", repr(e))
+    text = call_responses_text(
+        client,
+        model="gpt-4o-mini",
+        prompt=prompt,
+        temperature=0.2,
+        max_output_tokens=520,
+        log_prefix="preferences_update",
+    )
+    if not text:
         return False
-
-    parts = []
-    for item in resp.output:
-        if item.type == "message":
-            for c in item.content:
-                if c.type == "output_text":
-                    parts.append(c.text)
-
-    text = ("".join(parts) or "").strip()
 
     if text == "NO_UPDATE":
         return False
@@ -139,3 +130,5 @@ NO_UPDATE
     safe_write(PREFERENCES_PATH, text)
 
     return True
+from .llm_utils import call_responses_text
+

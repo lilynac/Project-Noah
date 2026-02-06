@@ -12,6 +12,8 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 from .paths import CONSULTS_PATH, EMOTIONAL_MARKS_PATH
+from .llm_utils import call_responses_text
+
 
 UPDATE_INTERVAL = 10 * 60  # 10分
 
@@ -156,24 +158,14 @@ Soulの心理状態: （1〜2文。感情・関心・迷いなど）
 対応スタンス: （1〜2文。質問は“しない/最小”が前提。必要なら「質問は1つまで」と書く）
 """
 
-    try:
-        response = client.responses.create(
-            model="gpt-4o-mini",
-            input=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_output_tokens=260,
-        )
-    except Exception:
-        return
-
-    output_parts = []
-    for item in response.output:
-        if item.type == "message":
-            for content in item.content:
-                if content.type == "output_text":
-                    output_parts.append(content.text)
-
-    raw = "".join(output_parts).strip()
+    raw = call_responses_text(
+        client,
+        model="gpt-4o-mini",
+        prompt=prompt,
+        temperature=0.2,
+        max_output_tokens=260,
+        log_prefix="emotional_update",
+    )
     if not raw:
         return
 

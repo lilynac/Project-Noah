@@ -10,6 +10,8 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 from .paths import CONSULTS_PATH, NOAH_RESEARCH_PATH
+from .llm_utils import call_responses_text
+
 
 # どれくらいの頻度で “芽” を拾うか（まずは1時間に1回くらいが安全）
 UPDATE_INTERVAL = 60 * 60  # 60分
@@ -160,25 +162,14 @@ def update_noah_research() -> bool:
 メモ: ...
 """
 
-    try:
-        resp = client.responses.create(
-            model="gpt-4o-mini",
-            input=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_output_tokens=520,
-        )
-    except Exception as e:
-        print("noah_research_update: OpenAI error:", repr(e))
-        return False
-
-    parts = []
-    for item in resp.output:
-        if item.type == "message":
-            for c in item.content:
-                if c.type == "output_text":
-                    parts.append(c.text)
-
-    text = ("".join(parts) or "").strip()
+    text = call_responses_text(
+        client,
+        model="gpt-4o-mini",
+        prompt=prompt,
+        temperature=0.2,
+        max_output_tokens=520,
+        log_prefix="noah_research_update",
+    )
     if not text:
         return False
 
