@@ -14,6 +14,7 @@ EMOTIONAL_MARKS_PATH = str(MEMORY_DIR / "emotional_marks.txt")
 PREFERENCES_PATH = str(MEMORY_DIR / "preferences.txt")
 PREFERENCES_HISTORY_PATH = str(MEMORY_DIR / "preferences_history.txt")
 NOAH_IDENTITY_PATH = str(MEMORY_DIR / "noah_identity.txt")
+NOAH_STATE_PATH = str(MEMORY_DIR / "noah_state.txt")
 MODE_PATH = str(MEMORY_DIR / "mode.txt")
 
 # notes（人間が手で書くメモ）
