@@ -156,11 +156,26 @@ Soulの心理状態: （1〜2文。感情・関心・迷いなど）
 対応スタンス: （1〜2文。質問は“しない/最小”が前提。必要なら「質問は1つまで」と書く）
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.2,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_output_tokens=260,
+        )
+    except Exception:
+        return
 
-    summary = clean_model_output(response.choices[0].message.content, start, end)
+    output_parts = []
+    for item in response.output:
+        if item.type == "message":
+            for content in item.content:
+                if content.type == "output_text":
+                    output_parts.append(content.text)
+
+    raw = "".join(output_parts).strip()
+    if not raw:
+        return
+
+    summary = clean_model_output(raw, start, end)
     safe_append(EMOTIONAL_MARKS_PATH, summary + "\n\n")

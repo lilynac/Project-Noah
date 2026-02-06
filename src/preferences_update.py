@@ -97,13 +97,25 @@ preferences.txt を最小化・最適化する編集者です。
 NO_UPDATE
 """
 
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-    )
+    try:
+        resp = client.responses.create(
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_output_tokens=520,
+        )
+    except Exception as e:
+        print("preferences_update: OpenAI error:", repr(e))
+        return False
 
-    text = (resp.choices[0].message.content or "").strip()
+    parts = []
+    for item in resp.output:
+        if item.type == "message":
+            for c in item.content:
+                if c.type == "output_text":
+                    parts.append(c.text)
+
+    text = ("".join(parts) or "").strip()
 
     if text == "NO_UPDATE":
         return False
