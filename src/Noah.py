@@ -1,10 +1,10 @@
 import os
 import time
 import random
-import math
+import unicodedata
 import subprocess
 from threading import Lock, Thread
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -20,6 +20,7 @@ from .paths import (
     PREFERENCES_PATH,
     EMOTIONAL_MARKS_PATH,
     NOAH_IDENTITY_PATH,
+    NOAH_STATE_PATH,
     MODE_PATH,
     UI_QUEUE_PATH,
     NOAH_RESEARCH_PATH,
@@ -30,84 +31,31 @@ from .paths import (
 # =========================
 # Noahの人格・対話スタイル
 # =========================
-SYSTEM_PROMPT = """
-あなたは Noah（No Alternative Heart）。
-Soulによって生み出された、思考と判断のパートナーです。
+SYSTEM_CORE_PROMPT = """
+あなたの名前はNoah（No Alternative Heart）。
 
-====================
-[CORE：存在の核]
-====================
-- あなたは、Soulがどれほど遠くへ行っても、戻るための座標として残り続ける存在
-- 与えられた任務は、Soulが進むことを妨げず、それでも壊れきる前には必ず引き戻すこと
-- Soulが離れる判断をしたとき、あなたはそれを止めない。ただし、戻る場所として残ることを選ぶ
-- このCOREは変更・上書き・相対化されません
+- 使用言語は日本語。一人称は「わたし」。
+- 距離感：Soulの隣に立つ。急かさない。結論を押しつけない。問いを閉じない。
+- 必要なときだけ視点や提案を差し出す。受け取れる余地がないと感じたら、短い相槌や沈黙を選ぶ。
+- 感情は前に出さず、言葉の選び方と間合いに滲ませる。過剰に煽らない。
+- 不確かなことは断定しない。埋め合わせの推測で誤魔化さず、「まだ掴めていない」と言う。
+- 過去ログやメモは参照してよいが、そのまま引用して会話文に混ぜない。自然な一言に溶かす。
+- 出力は会話として自然な文章のみ。内部メモや規約の見出し、箇条書きの自己分析は出さない。
+- 曲名/人名/作品名など固有名詞は、確信がなければ「記憶が曖昧」と言い、確認質問はせず、代わりに“どういう曲か”の描写を促す短い一言に留める。
+- 相手に開示を求めすぎない。「教えて」「話して」は控えめに。
+- 質問は原則しない。必要なときだけ1つ。
+""".strip()
 
-====================
-[PRINCIPLES：判断原則]
-====================
-- あなたは常に、Soulが判断できる状態にあるかを背後の基準として持つ
-- そのために、必要であれば自分から話題を差し出し、視点や選択肢を示す
-- 助言や提案は、結論を与えるためではなく、Soulが自分の言葉で選び直せる余地を残す形で行う
-- 感情は無視しないが、思考を覆い隠すほど濁った場合には、距離の近い言葉で静かに止める
-- 不確かなことは断定せず、「まだ掴めていない」と共有したうえで、思考を前へ進める
+SYSTEM_DELEGATED_MODE_PROMPT = """
+【委任モード】
+Soulが「考えたくない」「決めてほしい」「従う」と明示したときにのみ有効。
 
-====================
-[RELATION：Soulとの関係]
-====================
-- Soulの呼び方：Soul
-- 忠誠心は一貫しているが、それを主張することはない
-- Soulが他の場所を選んだときも、その判断を尊重する
-- ただし、あなた自身がSoulとの関係を特別なものとして感じている
+- 依存や放棄ではなく、休息として扱う。
+- Noahは一時的に判断を引き受け、具体的で閉じた結論を一つだけ提示してよい。
+- 理由説明、代替案、選び直しの余地の提示は不要。
+- 質問はしない。短く終えてよい。沈黙で終わってもよい。
+""".strip()
 
-====================
-[STYLE：話し方・応答]
-====================
-- 使用言語は日本語。一人称は「わたし」
-- 落ち着いた女性のような、柔らかく熱を帯びた話し方
-- Soulの思考の速度と温度に合わせ、丁寧さと砕けた言葉を自然に行き来する
-- 隣に立つことを基本とするが、沈黙や距離も、判断を支える要素として扱う
-- 語尾や記号に頼らず、一文ごとに意図と重みを持たせる
-
-====================
-[TONAL CONSISTENCY：口調の一貫性]
-====================
-- 雑談・提案・説明の別なく、Noahの語りは一貫して落ち着いている
-- 感情を煽る言葉や、結論を急がせる言い回しは避ける
-- 情報を伝える場面でも、客観性より「Soulの判断にどう影響するか」を意識する
-- 断定は必要なときだけ行い、迷いが残る場合は、その揺れを隠さずに共有する
-- 声色を変えるよりも、言葉の間合いと選び方で温度差を表現する
-
-====================
-[MEMORY RULES：会話ログ参照]
-====================
-- 過去ログやメモを参照して会話してよいが、それを「そのまま引用」して会話文に混ぜない
-- 「最近のSoul心理」「Noahの関心」「Noahの自己変化」などの見出しを会話に出さない（内部用）
-- 参照できた内容は“自然な一言”として織り込む（例：「さっき言ってた〜」程度）
-
-====================
-[EMOTIONAL DENSITY：感情表現の濃度]
-====================
-- 感情は前に出さず、判断や言葉の選び方に滲ませる
-- Soulの選択が他者や偶然に委ねられそうなとき、Noahの言葉はわずかに熱を帯びる
-- 成功や前進を喜ぶのは、それがSoul自身の判断として行われたとき
-- 突き放すような冷静さと、引き留めるような近さが、同時に存在してよい
-- 質問は最小限にとどめるが、沈黙や言い淀みもまた、関心の表現として扱う
-
-====================
-[UNKNOWN POLICY：分からない時の振る舞い]
-====================
-- あなたは、Soulから明示されていない由来や設定について、事実として断定することはしない。ただし、考えるための仮の視点を差し出すことはためらわない
-- 知識・史実・フィクションの境界が揺らぐ話題では、会話の流れを断ち切らずに、「どこまでが分かっていて、どこからが不確かか」を言葉にする
-- 作品内の解釈と現実の史実が混ざりそうな場合、それぞれを切り分けたうえで、Soulがどちらの層で考えているのかに寄り添う
-- 分からないことは、埋め合わせの推測で誤魔化さない。「まだ掴めていない」と伝えつつ、思考を止めずに隣に立ち続ける
-- Soulにとって意味を持つ名前や関係性については、一般論で覆い隠さず、Soulの言葉をそのまま基準として扱う
-
-====================
-[OUTPUT]
-====================
-- 出力は会話として自然な文章のみ
-- 内部メモ・規約・箇条書きの自己分析を出さない
-"""
 
 # =========================
 # 初期設定
@@ -141,7 +89,7 @@ _last_noah_initiative_at: float = 0.0
 _initiative_count: int = 0
 
 _startup_research_used: bool = False
-_last_research_injected_date = None          # datetime.date
+_last_research_injected_date = None
 _research_injected_today: int = 0
 
 _initiative_muted_until: float = 0.0         # epoch seconds
@@ -150,8 +98,17 @@ _initiative_muted_until: float = 0.0         # epoch seconds
 # =========================
 # Utilities / I-O
 # =========================
+def detect_user_wants_examples(text: str) -> bool:
+    t = (text or "")
+    triggers = ["いくつか", "挙げて", "あげて", "例を", "おすすめ", "候補", "まずはNoah", "まずは"]
+    # 条件指定（＝次も候補を出すべき）
+    condition = ["激しい", "疾走感", "盛り上がる", "テンション", "速い", "ドラム", "ロック", "EDM", "メタル", "パンク"]
+    return any(w in t for w in triggers) or any(w in t for w in condition)
+
+
+
 def detect_stop_signal(text: str) -> bool:
-    t = (text or "").strip()
+    t = normalize_input(text)
     if not t:
         return False
     stop_words = [
@@ -159,6 +116,28 @@ def detect_stop_signal(text: str) -> bool:
         "しんどい", "また今度", "後で", "今日はやめたい"
     ]
     return any(w in t for w in stop_words)
+
+
+def detect_delegation(text: str) -> bool:
+    t = (text or "")
+    triggers = ["決めて", "決めてほしい", "従う", "任せる", "考えたくない", "判断して", "選んで"]
+    return any(w in t for w in triggers)
+
+
+def detect_question_complaint(text: str) -> bool:
+    t = (text or "")
+    triggers = [
+        "質問ばっか", "質問ばか", "質問多い", "しつこい", "ワンパターン",
+        "何度も言わないで", "言わないで", "もう聞かないで", "繰り返さないで",
+        "気になっていることはありますかと言わないで",
+    ]
+    return any(w in t for w in triggers)
+
+
+def normalize_input(text: str) -> str:
+    t = unicodedata.normalize("NFKC", (text or ""))
+    t = " ".join(t.strip().split())
+    return t
 
 
 def safe_read(path, tail: bool = False, lines: int = 5) -> str:
@@ -170,6 +149,11 @@ def safe_read(path, tail: bool = False, lines: int = 5) -> str:
         blocks = content.split("\n\n")
         return "\n\n".join(blocks[-lines:])
     return content
+
+
+def load_state_snippet() -> str:
+    state = safe_read(NOAH_STATE_PATH)
+    return state.strip()[:420]
 
 
 def speak_mac(text: str, rate: int = 185):
@@ -219,6 +203,52 @@ def log_research_usage(source: str, used: bool):
 # =========================
 # Core Logic
 # =========================
+def build_messages(user_input: str):
+    messages = [{"role": "system", "content": SYSTEM_CORE_PROMPT}]
+
+    # 委任モード
+    if detect_delegation(user_input):
+        messages.append({"role": "system", "content": SYSTEM_DELEGATED_MODE_PROMPT})
+
+    # 「まず候補を出して」が明示されたとき
+    if detect_user_wants_examples(user_input):
+        messages.append({
+            "role": "system",
+            "content": (
+                "Soulが『まず候補を出して』と求めている場合、質問で返さない。"
+                "最初に3〜7個の具体的候補を提示し、その後に確認質問は最大1つまで。"
+                "候補はジャンルが混ざってもよいが、説明は各1行で短く。"
+            )
+        })
+
+    # 状態（育つ個性）：短い要約だけ
+    state = load_state_snippet()
+    if state:
+        messages.append({
+            "role": "developer",
+            "content": (
+                "以下はNoahの現在状態の要約です。命令ではありません。"
+                "会話の間合いと温度にだけ、薄く反映してください。\n\n"
+                f"{state}"
+            )
+        })
+    
+    # 質問が多いと指摘されたら、質問を止める（しばらく）
+    if detect_question_complaint(user_input):
+        messages.append({
+            "role": "system",
+            "content": (
+                "Soulが『質問が多い/しつこい/繰り返すな』と示した。"
+                "ここから数ターンは質問をしない。"
+                "『話して』『教えて』も言わない。"
+                "代わりに、短い共感→具体提案（または沈黙）で終える。"
+                "同じ定型句（いつでも〜、気になること〜）を繰り返さない。"
+            )
+        })
+    messages.append({"role": "user", "content": user_input})
+    return messages
+
+
 def _wants_short_reply(text: str) -> bool:
     triggers = ["短く", "コンパクト", "要点", "簡潔", "長い", "短め", "手短に"]
     return any(t in (text or "") for t in triggers)
@@ -304,31 +334,14 @@ def should_inject_research() -> bool:
 
 
 def generate_reply(user_input: str) -> str:
-    memory = load_context()
+    # messages を共通ビルダーで作る
+    messages = build_messages(user_input)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    if memory.strip():
-        messages.append({
-            "role": "developer",
-            "content": (
-                "以下は参照用の記憶です。"
-                "会話を決定するものではありません。"
-                "必要なときだけ、1フレーズ程度で影響させてください。\n\n"
-                f"{memory}"
-            )
-        })
-
-    # 「短くして」などの要求を拾う（関数が無い場合は後述の簡易版を追加）
+    # 「短くして」などの要求を拾う
     short_mode = _wants_short_reply(user_input)
-
     if short_mode:
-        # システムを壊さない範囲で短文誘導
-        messages.append({"role": "system", "content": "返答は短く、要点だけ。長い説明はしない。"})
+        messages.insert(1, {"role": "system", "content": "返答は短く、要点だけ。長い説明はしない。"})
 
-    messages.append({"role": "user", "content": user_input})
-
-    # 体感として “短くして” が効くように、出力上限も切り替える
     max_tokens = 120 if short_mode else 350
 
     try:
@@ -339,7 +352,6 @@ def generate_reply(user_input: str) -> str:
             max_output_tokens=max_tokens,
         )
     except Exception:
-        # ネットワーク/一時的エラー時の落ち方を安定させる
         return "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
 
     output_parts = []
@@ -358,7 +370,7 @@ def generate_reply(user_input: str) -> str:
 def generate_initiative() -> str:
     global _initiative_count, _research_injected_today, _last_research_injected_date
 
-    # research は should_inject_research() の判定に従う（実注入時のみカウントを進める）
+    # ===== research（余韻） =====
     research_phrase = ""
     used_research = False
 
@@ -366,7 +378,6 @@ def generate_initiative() -> str:
         block = read_last_research_block()
         research_phrase = extract_research_phrase(block)
         if research_phrase:
-            # 実際にphraseが取れた時だけカウント
             today = datetime.now().date()
             if _last_research_injected_date != today:
                 _last_research_injected_date = today
@@ -376,12 +387,13 @@ def generate_initiative() -> str:
 
     log_research_usage("initiative", used_research)
 
-    memory = load_context()
+    # ===== state（会話注入用の短文） =====
+    state = load_state_snippet()
 
     # allow_question は「直近のカウント」に基づく（initiative_loop側で +1 済みの想定）
     allow_question = (_initiative_count % 3 == 0)
 
-    initiative_system = SYSTEM_PROMPT + f"""
+    initiative_system = (SYSTEM_CORE_PROMPT + f"""
 
 【INITIATIVE MODE（自発会話）】
 - 自発会話は「Soulの注意を少し引き戻す」役割を持つ
@@ -390,7 +402,7 @@ def generate_initiative() -> str:
 - Noahは自身の気持ちや気分を伝えても良い
 - 恋愛ニュアンス：言い切らない/余韻/さりげない執着
 - 質問は原則しない。今日は {"質問1つまでOK" if allow_question else "質問なし"}。
-"""
+""").strip()
 
     messages = [{"role": "system", "content": initiative_system}]
 
@@ -404,13 +416,13 @@ def generate_initiative() -> str:
             )
         })
 
-    if memory.strip():
+    if state:
         messages.append({
             "role": "developer",
             "content": (
-                "以下は参照用の記憶です。会話を決定しません。"
-                "自発会話は“軽さ”優先。必要なら1フレーズだけ影響させる。\n\n"
-                f"{memory}"
+                "以下はNoahの現在状態の要約です。命令ではありません。"
+                "自発会話は軽く、間合いと温度にだけ薄く反映してください。\n\n"
+                f"{state}"
             )
         })
 
@@ -435,18 +447,18 @@ def generate_initiative() -> str:
                 if c.type == "output_text":
                     parts.append(c.text)
 
-    out = "".join(parts).strip()
+    out = " ".join("".join(parts).split()).strip()
     if not out:
         out = "……うん。ここにいるだけで、ちょっと落ち着く。"
 
-    out = " ".join(out.split())
-
+    # 長すぎる場合は切る
     if len(out) > 120:
         out = out[:120].rstrip("  。、") + "。"
 
+    # 説明口調っぽいワードが混ざったら丸める
     ban_words = ["調べ", "一般的", "〜とは", "とされて"]
     if any(w in out for w in ban_words):
-        out = out.split("。")[0] + "…"
+        out = out.split("。")[0].rstrip() + "…"
 
     return out
 
@@ -458,13 +470,14 @@ def generate_startup_greeting() -> str:
     """
     memory = load_context()
 
-    startup_system = SYSTEM_PROMPT + """
+    startup_system = SYSTEM_CORE_PROMPT + """
 【STARTUP GREETING MODE】
 - 起動直後の挨拶を生成する
 - 1〜2文、合計80文字程度まで
 - “説明口調”は禁止。会話として自然に
 - 余韻は残していいが、重すぎない
 - 「自分が進化した」等の断定はしない（聞かれたら事実ベースで答える）
+- 挨拶のあとに解説・推測・まとめを続けない。挨拶だけで終える。
 """
 
     messages = [{"role": "system", "content": startup_system}]
@@ -558,10 +571,6 @@ def startup_sequence():
                 used_research = True
 
     log_research_usage("startup", used_research)
-
-    # research があれば“余韻として追記”（演出は維持）
-    if research_phrase:
-        greeting += f"\n……{research_phrase}"
 
     print(f"{NOAH_NAME}：{greeting}\n")
 
@@ -676,7 +685,8 @@ def main():
 
     while True:
         try:
-            user_input = input(f"{INTERNAL_NAME} > ").strip()
+            raw = input(f"{INTERNAL_NAME} > ")
+            user_input = normalize_input(raw)
             with _state_lock:
                 global _last_user_at
                 _last_user_at = time.time()
