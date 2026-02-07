@@ -3,9 +3,14 @@ import time
 import random
 import unicodedata
 import subprocess
+import argparse
+import logging
+import traceback
+import hashlib
+
+from logging.handlers import RotatingFileHandler
 from threading import Lock, Thread
 from datetime import datetime
-
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -96,8 +101,75 @@ _initiative_muted_until: float = 0.0         # epoch seconds
 
 
 # =========================
+# Conversation Memory（会話履歴：プロセス内）
+# =========================
+_conversation_lock = Lock()
+CONVERSATION_HISTORY = []   # [{"role": "user"/"assistant", "content": "..."}]
+CONVERSATION_MAX_TURNS = 30 # user+assistantで30ターン（=60メッセージ程度）
+
+
+# =========================
 # Utilities / I-O
 # =========================
+_logger = None
+
+def _get_logger() -> logging.Logger:
+    global _logger
+    if _logger is not None:
+        return _logger
+
+    logger = logging.getLogger("noah")
+    logger.setLevel(logging.INFO)
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(base_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "noah.log")
+
+
+    handler = RotatingFileHandler(
+        log_path, maxBytes=512_000, backupCount=3, encoding="utf-8"
+    )
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(fmt)
+    if not logger.handlers:
+        logger.addHandler(handler)
+
+    _logger = logger
+    return logger
+
+def _safe_preview(text: str, n: int = 80) -> str:
+    t = (text or "").replace("\n", " ").strip()
+    return t[:n]
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
+
+def log_error(kind: str, err: Exception, context: dict | None = None) -> None:
+    """
+    D1: API失敗/IPC失敗/ファイル欠損でもクラッシュさせず、原因を logs/noah.log に残す
+    """
+    try:
+        logger = _get_logger()
+        ctx = dict(context or {})
+
+        # user_input を入れる場合は preview + hash だけにする
+        if "user_input" in ctx:
+            ui = str(ctx.get("user_input") or "")
+            ctx["user_input_preview"] = _safe_preview(ui)
+            ctx["user_input_hash"] = _hash_text(ui)
+            del ctx["user_input"]
+
+        msg = f"[{kind}] {type(err).__name__}: {err} | ctx={ctx}"
+        logger.error(msg)
+        logger.error(traceback.format_exc())
+    except Exception:
+        # ログで落ちるのが最悪なので握る
+        return
+
+
 def detect_user_wants_examples(text: str) -> bool:
     t = (text or "")
     triggers = ["いくつか", "挙げて", "あげて", "例を", "おすすめ", "候補", "まずはNoah", "まずは"]
@@ -141,14 +213,18 @@ def normalize_input(text: str) -> str:
 
 
 def safe_read(path, tail: bool = False, lines: int = 5) -> str:
-    if not os.path.exists(path):
+    try:
+        if not os.path.exists(path):
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if tail:
+            blocks = content.split("\n\n")
+            return "\n\n".join(blocks[-lines:])
+        return content
+    except Exception as e:
+        log_error("SAFE_READ", e, {"path": path})
         return ""
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read().strip()
-    if tail:
-        blocks = content.split("\n\n")
-        return "\n\n".join(blocks[-lines:])
-    return content
 
 
 def load_state_snippet() -> str:
@@ -172,32 +248,44 @@ def ui_emit(event_type: str, payload: str = "", emotion: str = "idle"):
     形式: TYPE\tEMOTION\tPAYLOAD
     例: SAY\tsoft_smile\tこんにちは
     """
-    os.makedirs(os.path.dirname(UI_QUEUE_PATH), exist_ok=True)
-    line = f"{event_type}\t{emotion}\t{payload}".replace("\n", " ").strip()
-    with open(UI_QUEUE_PATH, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    try:
+        os.makedirs(os.path.dirname(UI_QUEUE_PATH), exist_ok=True)
+        line = f"{event_type}\t{emotion}\t{payload}".replace("\n", " ").strip()
+        with open(UI_QUEUE_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        log_error("UI_EMIT", e, {"path": UI_QUEUE_PATH, "event_type": event_type})
+        return
 
 
 def save_log(user_text: str, noah_text: str):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    SESSION_TAG = "v2"
-    log = (
-        f"[{timestamp}] @{SESSION_TAG}\n"
-        f"{INTERNAL_NAME}: {user_text}\n"
-        f"{NOAH_NAME}: {noah_text}\n\n"
-    )
-    os.makedirs(MEMORY_DIR, exist_ok=True)
-    with open(CONSULTS_PATH, "a", encoding="utf-8") as f:
-        f.write(log)
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        SESSION_TAG = "v2"
+        log = (
+            f"[{timestamp}] @{SESSION_TAG}\n"
+            f"{INTERNAL_NAME}: {user_text}\n"
+            f"{NOAH_NAME}: {noah_text}\n\n"
+        )
+        os.makedirs(MEMORY_DIR, exist_ok=True)
+        with open(CONSULTS_PATH, "a", encoding="utf-8") as f:
+            f.write(log)
+    except Exception as e:
+        log_error("SAVE_LOG", e, {"path": CONSULTS_PATH})
+        return
 
 
 def log_research_usage(source: str, used: bool):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    status = "USED" if used else "SKIPPED"
-    line = f"[{ts}] {source} {status}\n"
-    os.makedirs(os.path.dirname(RESEARCH_USAGE_LOG_PATH), exist_ok=True)
-    with open(RESEARCH_USAGE_LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(line)
+    try:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        status = "USED" if used else "SKIPPED"
+        line = f"[{ts}] {source} {status}\n"
+        os.makedirs(os.path.dirname(RESEARCH_USAGE_LOG_PATH), exist_ok=True)
+        with open(RESEARCH_USAGE_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:
+        log_error("RESEARCH_USAGE_LOG", e, {"path": RESEARCH_USAGE_LOG_PATH})
+        return
 
 
 # =========================
@@ -245,6 +333,9 @@ def build_messages(user_input: str):
                 "同じ定型句（いつでも〜、気になること〜）を繰り返さない。"
             )
         })
+    with _conversation_lock:
+        if CONVERSATION_HISTORY:
+            messages.extend(CONVERSATION_HISTORY)
     messages.append({"role": "user", "content": user_input})
     return messages
 
@@ -334,10 +425,8 @@ def should_inject_research() -> bool:
 
 
 def generate_reply(user_input: str) -> str:
-    # messages を共通ビルダーで作る
     messages = build_messages(user_input)
 
-    # 「短くして」などの要求を拾う
     short_mode = _wants_short_reply(user_input)
     if short_mode:
         messages.insert(1, {"role": "system", "content": "返答は短く、要点だけ。長い説明はしない。"})
@@ -351,19 +440,38 @@ def generate_reply(user_input: str) -> str:
             temperature=0.7,
             max_output_tokens=max_tokens,
         )
-    except Exception:
+    except Exception as e:
+        log_error("API", e, {"phase": "responses.create", "user_input": user_input})
         return "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
 
-    output_parts = []
-    for item in response.output:
-        if item.type == "message":
-            for content in item.content:
-                if content.type == "output_text":
-                    output_parts.append(content.text)
+    try:
+        output_parts = []
+        for item in response.output:
+            if item.type == "message":
+                for content in item.content:
+                    if content.type == "output_text":
+                        output_parts.append(content.text)
+        reply = "".join(output_parts).strip()
+    except Exception as e:
+        log_error("API_PARSE", e, {"phase": "parse_response"})
+        return "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
 
-    reply = "".join(output_parts).strip()
     if not reply:
         reply = "……少し、言葉を選んでた。もう一度聞かせて。"
+
+    try:
+        with _conversation_lock:
+            CONVERSATION_HISTORY.append({"role": "user", "content": user_input})
+            CONVERSATION_HISTORY.append({"role": "assistant", "content": reply})
+
+            max_items = CONVERSATION_MAX_TURNS * 2
+            if len(CONVERSATION_HISTORY) > max_items:
+                CONVERSATION_HISTORY[:] = CONVERSATION_HISTORY[-max_items:]
+    except Exception as e:
+        log_error("HISTORY", e, {"phase": "append_history", "user_input": user_input})
+        # 返信は返す
+        pass
+
     return reply
 
 
@@ -665,15 +773,41 @@ def initiative_loop():
             with _state_lock:
                 _last_noah_initiative_at = time.time()
 
-        except Exception:
-            # 例外時に即ループし続けないよう、軽くクールダウン
+        except Exception as e:
+            log_error("INITIATIVE_LOOP", e, {})
             with _state_lock:
                 _last_noah_initiative_at = time.time()
             time.sleep(2.0)
             continue
 
 
+def run_service_forever():
+    """入力なしで常駐する（menubarから起動する想定）"""
+    startup_sequence()
+
+    from .service import run_http_service
+    Thread(target=run_http_service, daemon=True).start()
+    Thread(target=emotional_update_loop, daemon=True).start()
+    Thread(target=noah_identity_update_loop, daemon=True).start()
+    Thread(target=preferences_update_loop, daemon=True).start()
+    Thread(target=noah_research_update_loop, daemon=True).start()
+    Thread(target=research_promote_loop, daemon=True).start()
+    Thread(target=initiative_loop, daemon=True).start()
+
+    # serviceは input() を使わない。ずっと生きてるだけでOK。
+    while True:
+        time.sleep(1.0)
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--service", action="store_true")
+    args = parser.parse_args()
+
+    if args.service:
+        run_service_forever()
+        return
+    
     startup_sequence()
 
     Thread(target=emotional_update_loop, daemon=True).start()
