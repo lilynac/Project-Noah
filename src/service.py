@@ -14,14 +14,16 @@ from .Noah import (
     save_log,
     ui_emit,
     log_error,
+    mute_initiative,
+    INITIATIVE_MUTE_SECONDS,
+    ipc_begin,
+    ipc_end,
+    note_user_activity,
 )
 
 # menubar側と合わせる（必要なら変更）
 HOST = "127.0.0.1"
 PORT = 8765
-
-# D2で本格化するが、D1/D2互換のための最小既定値
-INITIATIVE_MUTE_SECONDS = 60
 
 
 class NoahIPCHandler(BaseHTTPRequestHandler):
@@ -77,52 +79,58 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not found"})
             return
 
+        # ★ D2: IPC会話中は initiative を絶対に出さない（in-flight ガード）
+        ipc_begin()
         try:
-            body = self._read_json()
-        except Exception:
-            self._send_json(400, {"error": "invalid json"})
-            return
+            try:
+                body = self._read_json()
+            except Exception:
+                self._send_json(400, {"error": "invalid json"})
+                return
 
-        # message / text / input どれでも受ける
-        raw_msg = body.get("message")
-        if raw_msg is None:
-            raw_msg = body.get("text")
-        if raw_msg is None:
-            raw_msg = body.get("input")
+            raw_msg = body.get("message")
+            if raw_msg is None:
+                raw_msg = body.get("text")
+            if raw_msg is None:
+                raw_msg = body.get("input")
 
-        message = normalize_input(str(raw_msg or ""))
-        if not message:
-            self._send_json(400, {"error": "message is required"})
-            return
+            message = normalize_input(str(raw_msg or ""))
+            if not message:
+                self._send_json(400, {"error": "message is required"})
+                return
 
-        # 「静かに/やめて」系（D2で本格化するが、互換のためここでも吸収）
-        if detect_stop_signal(message):
-            reply = "うん、わかった。しばらく静かにしてるね。"
+            # ★ D2: IPC経由でも「ユーザー発話が来た」時刻を必ず更新
+            note_user_activity()
+
+            # stop signal
+            if detect_stop_signal(message):
+                reply = "うん、わかった。しばらく静かにしてるね。"
+                mute_initiative(INITIATIVE_MUTE_SECONDS, reason="stop_signal_ipc")
+                try:
+                    save_log(message, reply)
+                    ui_emit("SAY", reply, emotion="soft_smile")
+                except Exception as e:
+                    log_error("UI_EMIT_OR_LOG", e, {"phase": "stop_signal"})
+                self._send_json(200, {"reply": reply, "text": reply})
+                return
+
+            # 通常応答
+            try:
+                reply = generate_reply(message)
+            except Exception as e:
+                log_error("API_OR_REPLY", e, {"phase": "generate_reply"})
+                reply = "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
+
             try:
                 save_log(message, reply)
                 ui_emit("SAY", reply, emotion="soft_smile")
             except Exception as e:
-                log_error("UI_EMIT_OR_LOG", e, {"phase": "stop_signal"})
-            # 返却キーも互換で両方
+                log_error("UI_EMIT_OR_LOG", e, {"phase": "normal_reply"})
+
             self._send_json(200, {"reply": reply, "text": reply})
-            return
 
-        # 通常応答（API失敗でも落ちないのは generate_reply 側で担保）
-        try:
-            reply = generate_reply(message)
-        except Exception as e:
-            # generate_reply 側でも握る想定だが、ここでも最後の砦
-            log_error("API_OR_REPLY", e, {"phase": "generate_reply"})
-            reply = "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
-
-        try:
-            save_log(message, reply)
-            ui_emit("SAY", reply, emotion="soft_smile")
-        except Exception as e:
-            log_error("UI_EMIT_OR_LOG", e, {"phase": "normal_reply"})
-
-        # 返却キー互換：reply と text を両方返す
-        self._send_json(200, {"reply": reply, "text": reply})
+        finally:
+            ipc_end()
 
 
 def run_http_service(host: str = HOST, port: int = PORT) -> None:
