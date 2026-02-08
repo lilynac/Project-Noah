@@ -21,6 +21,11 @@ from threading import Lock, Thread
 from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
+from pathlib import Path
+import signal
+
+from .noah_config import load_runtime_config, RuntimeConfig
+from .log_setup import get_logger, ensure_pid_lock_or_exit, cleanup_pid_l
 
 from .emotional_update import update_emotional_marks
 from .noah_identity_update import update_noah_identity
@@ -77,8 +82,18 @@ SYSTEM_DELEGATED_MODE_PROMPT = """
 # =========================
 # 初期設定
 # =========================
-load_dotenv()
+# D4: config/.env を優先して読む（無ければ通常の .env）
+_env_candidates = [Path(__file__).resolve().parent / "config" / ".env", Path(".env")]
+for _p in _env_candidates:
+    if _p.exists():
+        load_dotenv(dotenv_path=str(_p))
+        break
+else:
+    load_dotenv()
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+CFG: RuntimeConfig = load_runtime_config(base_dir=Path(__file__).resolve().parent)
 
 INTERNAL_NAME = "あなた"
 NOAH_NAME = "Noah"
@@ -89,12 +104,13 @@ NOAH_IDENTITY_UPDATE_INTERVAL = 60 * 60      # 60分
 # =========================
 # 自発会話（Initiative）設定
 # =========================
-INITIATIVE_PER_HOUR = 5
-INITIATIVE_BASE_INTERVAL = int(60 * 60 / INITIATIVE_PER_HOUR)
-INITIATIVE_JITTER = 3 * 60                   # ±3分
-INITIATIVE_MIN_GAP = 120
-INITIATIVE_RECENT_USER_SILENCE = 30
-INITIATIVE_MUTE_SECONDS = 30 * 60            # stop signal で自発会話を30分ミュート
+INITIATIVE_PER_HOUR = CFG.initiative_per_hour
+INITIATIVE_BASE_INTERVAL = int(60 * 60 / max(1, INITIATIVE_PER_HOUR))
+INITIATIVE_JITTER = CFG.initiative_jitter_seconds                   # ±jitter
+INITIATIVE_MIN_GAP = CFG.initiative_min_gap_seconds
+INITIATIVE_RECENT_USER_SILENCE = CFG.initiative_recent_user_silence_seconds
+INITIATIVE_MUTE_SECONDS = CFG.initiative_mute_seconds            # stop signal で自発会話をミュート
+INITIATIVE_CONVERSATION_BLOCK = CFG.initiative_conversation_block_seconds
 
 # =========================
 # Runtime State（実行時状態）
@@ -144,27 +160,14 @@ def _get_logger() -> logging.Logger:
     if _logger is not None:
         return _logger
 
-    logger = logging.getLogger("noah")
-    logger.setLevel(logging.INFO)
-
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    log_dir = os.path.join(base_dir, "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, "noah.log")
-
-
-    handler = RotatingFileHandler(
-        log_path, maxBytes=512_000, backupCount=3, encoding="utf-8"
+    _logger = get_logger(
+        component="noah",
+        log_dir=CFG.log_dir,
+        level=CFG.log_level,
+        max_bytes=CFG.log_max_bytes,
+        backup_count=CFG.log_backup_count,
     )
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    handler.setFormatter(fmt)
-    if not logger.handlers:
-        logger.addHandler(handler)
-
-    _logger = logger
-    return logger
+    return _logger
 
 def _safe_preview(text: str, n: int = 80) -> str:
     t = (text or "").replace("\n", " ").strip()
@@ -462,6 +465,8 @@ def allow_and_register_initiative(text: str) -> tuple[bool, str]:
 
 
 def emit_initiative(text: str) -> bool:
+    logger = _get_logger()
+    logger.info(f"EMIT_TRY now={time.time():.3f} text_hash={_hash_short(text)}")
     """
     initiative を出す唯一の出口（ここを通さないと喋れない）
     """
@@ -1093,6 +1098,25 @@ def initiative_loop():
 
 def run_service_forever():
     """入力なしで常駐する（menubarから起動する想定）"""
+    slog = get_logger(
+        component="service",
+        log_dir=CFG.log_dir,
+        level=CFG.log_level,
+        max_bytes=CFG.log_max_bytes,
+        backup_count=CFG.log_backup_count,
+    )
+    ensure_pid_lock_or_exit(pid_file=CFG.pid_file, lock_file=CFG.lock_file, logger=slog)
+
+    def _handle_stop(sig, frame):
+        slog.info("SERVICE_STOP_SIGNAL sig=%s", sig)
+        cleanup_pid_lock(CFG.pid_file, CFG.lock_file)
+        raise SystemExit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _handle_stop)
+        signal.signal(signal.SIGINT, _handle_stop)
+    except Exception:
+        pass
     startup_sequence()
 
     from .service import run_http_service
@@ -1105,8 +1129,12 @@ def run_service_forever():
     Thread(target=initiative_loop, daemon=True).start()
 
     # serviceは input() を使わない。ずっと生きてるだけでOK。
-    while True:
-        time.sleep(1.0)
+    try:
+        while True:
+            time.sleep(1.0)
+    finally:
+        cleanup_pid_lock(CFG.pid_file, CFG.lock_file)
+
 
 
 def main():

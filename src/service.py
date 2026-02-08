@@ -11,6 +11,18 @@ import importlib
 
 Noah = importlib.import_module(__package__ + ".Noah")
 
+from .noah_config import load_runtime_config
+from .log_setup import get_logger
+
+_CFG = load_runtime_config()
+_SLOG = get_logger(
+    component="ipc",
+    log_dir=_CFG.log_dir,
+    level=_CFG.log_level,
+    max_bytes=_CFG.log_max_bytes,
+    backup_count=_CFG.log_backup_count,
+)
+
 generate_reply = Noah.generate_reply
 normalize_input = Noah.normalize_input
 detect_stop_signal = Noah.detect_stop_signal
