@@ -94,18 +94,63 @@ def _sup_save(path: str, data: Dict[str, Any]) -> None:
 
 def _sup_detect(user_text: str) -> Dict[str, bool]:
     """
-    D4用の抑制トリガ検知:
-    - silent: 空/空白のみ
-    - short : 短文（しきい値は強め）
-    - no_question: ?/？が無い
+    誤抑制を避ける検知ロジック（日本語向け）
+    - no_question 単体では抑制トリガにしない（日本語は「？」無しが普通）
+    - 抑制トリガは「静寂」「相槌レベルの短さ」「記号だけ」中心
+    - 普通に会話している/依頼している/質問している場合は engaged=True（抑制解除の判断材料）
+    戻り値:
+      silent: 空/空白のみ
+      short: 相槌/超短文/記号だけ（= 抑制トリガ）
+      no_question: ?/？が無い（情報として保持。単体で抑制トリガにしない）
+      engaged: 通常会話/依頼/質問など（= 抑制解除したい）
     """
-    t = (user_text or "").strip()
-    if t == "":
-        return {"silent": True, "short": False, "no_question": True}
+    import re
 
-    short = len(t) <= 6
-    no_question = ("?" not in t) and ("？" not in t)
-    return {"silent": False, "short": short, "no_question": no_question}
+    raw = user_text or ""
+    t = raw.strip()
+
+    # 1) 静寂
+    if t == "":
+        return {"silent": True, "short": False, "no_question": False, "engaged": False}
+
+    # 2) 質問記号
+    has_q = ("?" in t) or ("？" in t)
+
+    # 3) 記号だけ（…、。、、！など）
+    symbol_only = re.fullmatch(
+        r"[\.\,\!\?\u3002\u3001\uFF01\uFF1F\u2026\u30FB\u3000\s]+", t
+    ) is not None
+
+    # 4) 相槌/短い肯定否定（必要なら運用で増やしてOK）
+    ack_words = {
+        "うん", "うーん", "はい", "ええ", "なるほど", "そう", "そうだね",
+        "ok", "OK", "了解", "りょ", "ありがと", "ありがとう", "助かる",
+        "まあ", "別に", "うんうん", "そうそう", "たしかに", "ほんと",
+        "w", "ww", "草", "…", "。", "！", "!",
+    }
+    short_ack = (t.lower() in {w.lower() for w in ack_words})
+
+    # 5) 依頼/会話継続の合図（= engaged）
+    engaged_hints = (
+        "教えて", "説明して", "提案して", "作って", "直して", "修正して", "確認して",
+        "教えてください", "お願いします", "お願い", "どうしたら", "どうすれば",
+        "なぜ", "いつ", "どこ", "どれ", "何", "どう",
+    )
+    engaged_hint = any(h in t for h in engaged_hints)
+
+    # 6) 長さ（日本語は短くても会話成立するので「超短い」に寄せる）
+    very_short = len(t) <= 4
+
+    # engaged: 質問/依頼/十分な長さの説明
+    engaged = has_q or engaged_hint or (len(t) >= 12 and not symbol_only)
+
+    # short（抑制トリガ）: 記号だけ or 超短い or 相槌
+    short = symbol_only or very_short or short_ack
+
+    # no_question は情報として返す（抑制トリガには使わない想定）
+    no_question = not has_q
+
+    return {"silent": False, "short": short, "no_question": no_question, "engaged": engaged}
 
 
 def _sup_update(
@@ -116,9 +161,13 @@ def _sup_update(
     cooldown_minutes: int = 5,
 ) -> Dict[str, Any]:
     """
-    検知→必ず更新（D4の主因を状態化）
-    - silent/short/no_question のいずれかで抑制を強化（時間＆ターン）
-    - 毎ターン cooldown_turns_remaining を1減らす（下限0）
+    suppression 状態更新（誤抑制対策版）
+
+    仕様:
+    - 検知→必ず更新（updated_atは_saveで更新）
+    - engaged=True のときは抑制を解除（通常会話で“かかりっぱなし”防止）
+    - 抑制トリガは silent / short のみ（no_question単体では抑制しない）
+    - no_question はカウンタとしては記録してよい（観測用）
     """
     data.setdefault("state", {})
     data.setdefault("counters", {})
@@ -131,27 +180,37 @@ def _sup_update(
     except Exception:
         st["cooldown_turns_remaining"] = 0
 
+    # engaged（通常会話/依頼/質問など）なら抑制解除
+    if signals.get("engaged"):
+        st["initiative_suppressed_until"] = None
+        st["initiative_suppressed_reason"] = "cleared_by_engaged"
+        st["last_trigger"] = _now_iso()
+        st["cooldown_turns_remaining"] = 0
+        return data
+
     hit = False
     reason_parts: list[str] = []
 
+    # silent → 抑制
     if signals.get("silent"):
         ct["silent_hits"] = int(ct.get("silent_hits") or 0) + 1
         reason_parts.append("silent")
         hit = True
 
+    # short（相槌/記号/超短文）→ 抑制
     if signals.get("short"):
         ct["short_hits"] = int(ct.get("short_hits") or 0) + 1
         reason_parts.append("short")
         hit = True
 
+    # no_question は「観測カウンタ」だけ（抑制トリガにはしない）
     if signals.get("no_question"):
         ct["no_question_hits"] = int(ct.get("no_question_hits") or 0) + 1
-        reason_parts.append("no_question")
-        hit = True
 
     if hit:
         now = datetime.now(JST)
         until = now + timedelta(minutes=cooldown_minutes)
+
         st["initiative_suppressed_until"] = until.isoformat()
         st["initiative_suppressed_reason"] = "+".join(reason_parts)
         st["last_trigger"] = now.isoformat()

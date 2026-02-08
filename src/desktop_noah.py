@@ -111,6 +111,23 @@ class Overlay(QLabel):
         )
         self.bubble.hide()
 
+        # --- Status label (Ready / Thinking / Error) ---
+        self.status = QLabel("Ready", self)
+        self.status.setStyleSheet(
+            """
+            QLabel {
+                background: rgba(0,0,0,130);
+                color: white;
+                padding: 4px 8px;
+                border-radius: 8px;
+                font-size: 12px;
+            }
+            """
+        )
+        self.status.adjustSize()
+        self.status.move(28, 60)  # 吹き出しと被らない位置に
+        self.status.show()
+
         # --- Timers ---
         # 口パク更新（120ms）
         self.mouth_timer = QTimer()
@@ -165,9 +182,50 @@ class Overlay(QLabel):
                 payload = parts[2] if len(parts) >= 3 else ""
 
                 if etype == "SAY":
+                    # SAY\t<emotion>\t<text>
                     self.say(payload, emo)
+
                 elif etype == "EMO":
-                    self.show_emotion(emo)
+                    # EMO\t<emotion>\t<payload=emotion_name>
+                    # サーバ側の ui_emit は payload に感情名を入れる想定なので payload を優先
+                    self.show_emotion(payload or emo)
+
+                elif etype == "STATE":
+                    # STATE\t<emotion>\t<payload>
+                    #
+                    # payload formats:
+                    #   - "READY" / "THINKING" / "ERROR"                      (legacy)
+                    #   - "ERROR\t<reason>\t<log_dir>"                        (Sprint3仕上げ)
+                    # 推定は禁止：イベント駆動の固定短文のみ扱う
+                    tokens = (payload or "").split("\t")
+                    st = (tokens[0] if len(tokens) >= 1 else "").strip().upper()
+                    reason = (tokens[1] if len(tokens) >= 2 else "").strip()
+                    log_dir = (tokens[2] if len(tokens) >= 3 else "").strip()
+
+                    if st == "THINKING":
+                        self.status.setText("Thinking")
+                        self.show_emotion("neutral")
+
+                    elif st == "READY":
+                        self.status.setText("Ready")
+                        self.show_emotion("neutral")
+
+                    elif st == "ERROR":
+                        # Error + 理由1行 + ログ導線（既にあるなら表示）
+                        if reason:
+                            self.status.setText(f"Error: {reason}")
+                        else:
+                            self.status.setText("Error")
+                        self.show_emotion("concerned")
+
+                        # 最小導線：吹き出しでログ場所を一瞬出す（表示だけ、動作ロジックには触れない）
+                        if log_dir:
+                            self._show_bubble(f"Log: {log_dir}")
+
+                    else:
+                        self.status.setText(st or "Ready")
+
+                    self.status.adjustSize()
 
         except Exception:
             # UIは落とさない
@@ -177,6 +235,14 @@ class Overlay(QLabel):
     # UI actions
     # =========================
     def show_emotion(self, emo: str):
+        # Sprint3 EMO 3種の安定マッピング（推定なし）
+        emo_map = {
+            "neutral": "idle",
+            "soft_smile": "soft_smile",
+            "concerned": "sad",
+        }
+        emo = emo_map.get(emo, emo)
+
         self.current_emotion = emo if emo in self.pix else "idle"
         if not self.is_talking:
             self.setPixmap(self.pix.get(self.current_emotion, self.pix["idle"]))

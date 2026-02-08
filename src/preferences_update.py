@@ -8,6 +8,7 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 from .paths import PREFERENCES_PATH, PREFERENCES_HISTORY_PATH, CONSULTS_PATH
+from .llm_utils import call_responses_text
 
 # =========================
 # Utilities
@@ -130,5 +131,4 @@ NO_UPDATE
     safe_write(PREFERENCES_PATH, text)
 
     return True
-from .llm_utils import call_responses_text
 

@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import random
 import unicodedata
@@ -32,6 +33,7 @@ from .noah_identity_update import update_noah_identity
 from .preferences_update import update_preferences
 from .noah_research_update import update_noah_research
 from .noah_research_promote import promote_research_topics
+from .affection_update import update_affection_state
 from .paths import (
     MEMORY_DIR,
     CONSULTS_PATH,
@@ -120,6 +122,7 @@ INITIATIVE_MIN_GAP = CFG.initiative_min_gap_seconds
 INITIATIVE_RECENT_USER_SILENCE = CFG.initiative_recent_user_silence_seconds
 INITIATIVE_MUTE_SECONDS = CFG.initiative_mute_seconds            # stop signal で自発会話をミュート
 INITIATIVE_CONVERSATION_BLOCK = CFG.initiative_conversation_block_seconds
+AFFECTION_UPDATE_INTERVAL = 10 * 60  # 10分
 
 # =========================
 # Runtime State（実行時状態）
@@ -632,6 +635,22 @@ def build_messages(user_input: str):
             )
         })
 
+    # promoted topics から “一致したときだけ” 想起ヒントを1つ入れる
+    try:
+        topics = _load_promoted_topics()
+        hit = _pick_recall_topic(user_input, topics)
+        if hit:
+            messages.append({
+                "role": "developer",
+                "content": (
+                    "もし自然に繋がるなら、過去の定着トピックを“1回だけ”想起してよい。\n"
+                    f"- 想起候補: {hit}\n"
+                    "制約: 断定しない/引用しない/重くしない/質問は増やさない。"
+                )
+            })
+    except Exception:
+        pass
+
     with _conversation_lock:
         if CONVERSATION_HISTORY:
             messages.extend(CONVERSATION_HISTORY)
@@ -999,6 +1018,15 @@ def emotional_update_loop():
         time.sleep(EMOTIONAL_UPDATE_INTERVAL)
 
 
+def affection_update_loop():
+    while True:
+        try:
+            update_affection_state()
+        except Exception as e:
+            log_error("BG_AFFECTION", e, {})
+        time.sleep(AFFECTION_UPDATE_INTERVAL)
+
+
 def noah_identity_update_loop():
     while True:
         try:
@@ -1133,6 +1161,7 @@ def run_service_forever():
     Thread(target=noah_research_update_loop, daemon=True).start()
     Thread(target=research_promote_loop, daemon=True).start()
     Thread(target=initiative_loop, daemon=True).start()
+    Thread(target=affection_update_loop, daemon=True).start()
 
     # serviceは input() を使わない。ずっと生きてるだけでOK。
     try:
@@ -1140,6 +1169,47 @@ def run_service_forever():
             time.sleep(1.0)
     finally:
         cleanup_pid_lock(CFG.pid_file, CFG.lock_file)
+
+
+def _load_promoted_topics(max_lines: int = 60) -> list[str]:
+    text = safe_read(RESEARCH_PROMOTED_PATH)
+    if not text:
+        return []
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    # 末尾側から拾う（新しいほど優先）
+    lines = lines[-max_lines:]
+    out = []
+    for ln in lines:
+        if ln.startswith("- 関心（定着）:"):
+            body = ln.replace("- 関心（定着）:", "").strip()
+            # 末尾の（出現 n / 日数 d）を落とす
+            body = re.sub(r"（出現\s*\d+(?:\s*/\s*日数\s*\d+)?）\s*$", "", body).strip()
+            if body:
+                out.append(body)
+    # 新しい順を維持
+    return out
+
+def _pick_recall_topic(user_input: str, topics: list[str]) -> str:
+    t = normalize_input(user_input)
+    if not t or not topics:
+        return ""
+
+    # 1) まずは包含（低コスト）
+    for topic in topics[:20]:
+        nt = normalize_input(topic)
+        if not nt:
+            continue
+        if nt in t or t in nt:
+            return topic
+
+    # 2) 単語分割して部分一致（雑だが効く）
+    words = [w for w in re.split(r"\s+", t) if len(w) >= 2]
+    for topic in topics[:30]:
+        nt = normalize_input(topic)
+        if any(w in nt for w in words):
+            return topic
+
+    return ""
 
 
 
@@ -1160,6 +1230,7 @@ def main():
     Thread(target=noah_research_update_loop, daemon=True).start()
     Thread(target=research_promote_loop, daemon=True).start()
     Thread(target=initiative_loop, daemon=True).start()
+    Thread(target=affection_update_loop, daemon=True).start()
 
     while True:
         try:

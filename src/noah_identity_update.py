@@ -1,6 +1,6 @@
 # noah_identity_update.py
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -8,6 +8,7 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 from .paths import CONSULTS_PATH, NOAH_IDENTITY_PATH
+from .llm_utils import call_responses_text
 
 # Noah.py側と合わせる（例：10分）
 UPDATE_INTERVAL = 10 * 60
@@ -85,13 +86,15 @@ def update_noah_identity() -> bool:
 - 2個以上の質問
 """
 
-    resp = client.chat.completions.create(
+    text = call_responses_text(
+        client,
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
+        prompt=prompt,
         temperature=0.2,
+        max_output_tokens=520,
+        log_prefix="noah_identity_update",
     )
-
-    text = (resp.choices[0].message.content or "").strip()
+    text = (text or "").strip()
 
     if text == "NO_UPDATE":
         return False

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional
 
 def responses_output_text(resp) -> str:
     """

@@ -6,7 +6,7 @@ import json
 import time
 import urllib.request
 import urllib.error
-
+from src.paths import UI_QUEUE_PATH
 
 
 # ===== Paths / Logs =====
@@ -25,6 +25,28 @@ BACKEND_LOG = LOG_DIR / "menubar_backend.log"
 SERVICE_URL = "http://127.0.0.1:8765"
 CHAT_URL = SERVICE_URL + "/chat"
 HEALTH_URL = SERVICE_URL + "/health"
+
+def ui_emit(etype: str, payload: str, emotion: str = "neutral"):
+    """
+    Overlay（desktop_noah.py）が監視している ui_queue.txt へイベントを追記する。
+    フォーマット: TYPE\tEMOTION\tPAYLOAD
+    ※Sprint3の範囲：表示だけ（推定なし・イベント駆動）
+    """
+    try:
+        UI_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(UI_QUEUE_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{etype}\t{emotion}\t{payload}\n")
+    except Exception:
+        # menubarは落とさない
+        return
+
+
+def ui_error(reason: str):
+    """
+    Error理由（固定短文）＋ログ場所を payload で渡す。
+    payloadフォーマット: "ERROR\t<reason>\t<log_dir>"
+    """
+    ui_emit("STATE", f"ERROR\t{reason}\t{LOG_DIR}", emotion="concerned")
 
 def http_get(url: str, timeout: float = 0.25) -> str:
     with urllib.request.urlopen(url, timeout=timeout) as resp:
@@ -102,6 +124,7 @@ class NoahMenu(rumps.App):
 
         self.busy = True
         self.set_status("Thinking")
+        ui_emit("STATE", "THINKING", emotion="neutral")
 
         try:
             # もし常駐がいなければ起動して待つ
@@ -114,21 +137,38 @@ class NoahMenu(rumps.App):
 
             if not is_service_alive():
                 self.set_status("Error")
-                rumps.alert("Noah (error)", "Service is not running.")
+                ui_error("Service not reachable")
+                rumps.alert("Noah (error)", f"Service not reachable\nLog: {LOG_DIR}")
                 return
+
 
             obj = http_post_json(CHAT_URL, {"message": user_text}, timeout=60.0)
             reply = (obj.get("reply") or "").strip() or "(no reply)"
             rumps.alert("Noah", reply[-1400:])
 
         except urllib.error.HTTPError as e:
+            # HTTPエラー：menubar側では「次の行動」が分かる固定短文に寄せる（推定なし）
+            ui_error("Unknown error")
             body = e.read().decode("utf-8", errors="ignore")
-            rumps.alert("Noah (error)", f"HTTP {e.code}\n{body}"[-1400:])
+            rumps.alert("Noah (error)", f"Unknown error\nHTTP {e.code}\nLog: {LOG_DIR}\n\n{body}"[-1400:])
+
+        except urllib.error.URLError as e:
+            # タイムアウト等はURLErrorに来ることがある
+            ui_error("Timeout")
+            rumps.alert("Noah (error)", f"Timeout\nLog: {LOG_DIR}\n\n{repr(e)}"[-1400:])
+
         except Exception as e:
-            rumps.alert("Noah (error)", repr(e))
+            ui_error("Unknown error")
+            rumps.alert("Noah (error)", f"Unknown error\nLog: {LOG_DIR}\n\n{repr(e)}"[-1400:])
         finally:
             self.busy = False
-            self.set_status("Ready" if is_service_alive() else "Idle")
+            alive = is_service_alive()
+            self.set_status("Ready" if alive else "Idle")
+            if alive:
+                ui_emit("STATE", "READY", emotion="neutral")
+            else:
+                # Idleはoverlay上はReady扱いでも良いが、ここは無理にERRORにしない（表示だけ最小）
+                ui_emit("STATE", "READY", emotion="neutral")
 
 
     # --- Start (service mode) ---

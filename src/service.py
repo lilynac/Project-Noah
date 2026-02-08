@@ -136,6 +136,12 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
             # ★ D2: menubar経由でも「ユーザー発話が来た」を必ず記録
             note_user_activity()
 
+            # ★ D3-3: 状態表示（Thinking）
+            try:
+                ui_emit("STATE", "THINKING", emotion="neutral")
+            except Exception:
+                pass
+
             if detect_stop_signal(message):
                 reply = "うん、わかった。しばらく静かにしてるね。"
                 _SLOG.info("IPC_POST_STOP_SIGNAL path=%s ip=%s mute_sec=%s", path, ip, INITIATIVE_MUTE_SECONDS)
@@ -144,6 +150,8 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
                 try:
                     save_log(message, reply)
                     ui_emit("SAY", reply, emotion="soft_smile")
+                    # ★ D3-3: 状態表示（Readyへ復帰）
+                    ui_emit("STATE", "READY", emotion="neutral")
                 except Exception as e:
                     log_error("UI_EMIT_OR_LOG", e, {"phase": "stop_signal"})
                     _SLOG.exception("IPC_POST_STOP_SIGNAL_SIDE_EFFECT_FAIL path=%s ip=%s", path, ip)
@@ -152,22 +160,43 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
                 _SLOG.info("IPC_POST_END path=%s ip=%s status=200 reply_len=%s", path, ip, len(reply))
                 return
 
+            ok = True
             try:
                 reply = generate_reply(message)
             except Exception as e:
+                ok = False
                 log_error("API_OR_REPLY", e, {"phase": "generate_reply"})
                 _SLOG.exception("IPC_POST_GENERATE_REPLY_FAIL path=%s ip=%s", path, ip)
                 reply = "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
 
+            # ★ D3-2: 代替応答文を“エラー扱い”に落とす（推定なし・再現性100%）
+            FALLBACK_REPLY = "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
+            if reply.strip() == FALLBACK_REPLY:
+                ok = False
+
+            # ★ D3-2: EMO安定（成功/失敗で固定）
+            say_emo = "soft_smile" if ok else "concerned"
+
             try:
                 save_log(message, reply)
-                ui_emit("SAY", reply, emotion="soft_smile")
+                ui_emit("SAY", reply, emotion=say_emo)
+
+                # ★ D3-3: 状態表示（成功→READY / 失敗→ERROR）
+                if ok:
+                    ui_emit("STATE", "READY", emotion="neutral")
+                else:
+                    # Sprint3仕上げ：Error理由（固定短文）をpayloadで渡す（推定禁止・イベント駆動）
+                    # payload内フォーマット: "ERROR\t<reason>\t<log_dir>"
+                    reason = "API error"
+                    log_dir = getattr(_CFG, "log_dir", "")
+                    ui_emit("STATE", f"ERROR\t{reason}\t{log_dir}", emotion="concerned")
             except Exception as e:
                 log_error("UI_EMIT_OR_LOG", e, {"phase": "normal_reply"})
                 _SLOG.exception("IPC_POST_REPLY_SIDE_EFFECT_FAIL path=%s ip=%s", path, ip)
 
             self._send_json(200, {"reply": reply, "text": reply})
             _SLOG.info("IPC_POST_END path=%s ip=%s status=200 reply_len=%s", path, ip, len(reply))
+
 
         finally:
             ipc_end()
