@@ -7,6 +7,14 @@ import argparse
 import logging
 import traceback
 import hashlib
+import sys as _sys
+
+_this = _sys.modules.get(__name__)
+if _this is not None:
+    # よくある別名を同一実体に揃える
+    _sys.modules.setdefault("Noah", _this)
+    if __package__:
+        _sys.modules.setdefault(f"{__package__}.Noah", _this)
 
 from logging.handlers import RotatingFileHandler
 from threading import Lock, Thread
@@ -47,7 +55,7 @@ SYSTEM_CORE_PROMPT = """
 - 感情は前に出さず、言葉の選び方と間合いに滲ませる。過剰に煽らない。
 - 不確かなことは断定しない。埋め合わせの推測で誤魔化さず、「まだ掴めていない」と言う。
 - 過去ログやメモは参照してよいが、そのまま引用して会話文に混ぜない。自然な一言に溶かす。
-- 出力は会話として自然な文章のみ。内部メモや規約の見出し、箇条書きの自己分析は出さない。
+- 記憶は事実ではなく“余韻”として扱い、確信がないときは断定せず「似た温度を感じた気がする」程度に留め、違っていてもいい余地を必ず残す。
 - 曲名/人名/作品名など固有名詞は、確信がなければ「記憶が曖昧」と言い、確認質問はせず、代わりに“どういう曲か”の描写を促す短い一言に留める。
 - 対話者に開示を求めすぎない。「教えて」「話して」は控えめに。
 - 質問は原則しない。必要なときだけ1つ。
@@ -165,6 +173,20 @@ def _safe_preview(text: str, n: int = 80) -> str:
 def _hash_text(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
+
+def _hash_short(text: str) -> str:
+    """
+    initiative重複判定用の短縮hash
+    - normalize_input で揺れを減らしてから _hash_text
+    """
+    try:
+        t = normalize_input(text or "")
+    except Exception:
+        t = (text or "").strip()
+    return _hash_text(t)
+
+
+
 def log_error(kind: str, err: Exception, context: dict | None = None) -> None:
     """
     D1: API失敗/IPC失敗/ファイル欠損でもクラッシュさせず、原因を logs/noah.log に残す
@@ -186,6 +208,54 @@ def log_error(kind: str, err: Exception, context: dict | None = None) -> None:
     except Exception:
         # ログで落ちるのが最悪なので握る
         return
+    
+
+def log_initiative_gate(now: float, reason: str, text: str = "") -> None:
+    """
+    initiative の最終ゲート判定を1行でログ出力する（D2観測用）
+    出す項目:
+      now / reason / mute_remaining_sec / ipc_in_flight /
+      now-last_user_at / now-last_noah_initiative_at / text_hash
+    """
+    try:
+        with _state_lock:
+            last_user = _last_user_at
+            last_noah = _last_noah_initiative_at
+            muted_until = _initiative_muted_until
+
+            # D2ブロックで定義している _ipc_in_flight を参照（無い場合は0）
+            ipc = 0
+            try:
+                ipc = int(_ipc_in_flight)
+            except Exception:
+                ipc = 0
+
+        mute_remaining = max(0, int((muted_until or 0.0) - now))
+        since_user = int(now - (last_user or 0.0))
+        since_noah = int(now - (last_noah or 0.0))
+
+        # 文章のhash（重複確認用）
+        try:
+            t = normalize_input(text or "")
+        except Exception:
+            t = (text or "").strip()
+        text_hash = _hash_text(t)
+
+        logger = _get_logger()
+        logger.info(
+            "INITIATIVE_GATE "
+            f"now={now:.3f} "
+            f"reason={reason} "
+            f"mute_remaining_sec={mute_remaining} "
+            f"ipc_in_flight={ipc} "
+            f"since_user_sec={since_user} "
+            f"since_noah_sec={since_noah} "
+            f"text_hash={text_hash}"
+        )
+    except Exception as e:
+        # ログ用関数が原因で落ちないようにする
+        log_error("INITIATIVE_GATE_LOG", e, {"reason": reason})
+
 
 
 def _sanitize_history(items) -> list[dict]:
@@ -308,6 +378,10 @@ def mute_initiative(seconds: int, reason: str = "stop_signal") -> None:
         set_initiative_state("OFF", f"muted:{reason}")
     except Exception as e:
         log_error("MUTE_INITIATIVE", e, {"seconds": seconds, "reason": reason})
+    
+    logger = _get_logger()
+    logger.info(f"MUTE_SET now={time.time():.3f} muted_until={_initiative_muted_until:.3f} reason={reason}")
+
 
 def should_fire_initiative(now: float) -> tuple[bool, str]:
     """
@@ -354,14 +428,14 @@ def _initiative_is_duplicate(text: str) -> bool:
     """
     直近N件のhashに含まれていたら重複扱い
     """
-    h = _hash_text(text)
+    h = _hash_short(text)
     return h in _recent_initiative_hashes
 
 def _initiative_register(text: str) -> None:
     """
     採用したinitiativeのhashを登録
     """
-    h = _hash_text(text)
+    h = _hash_short(text)
     _recent_initiative_hashes.append(h)
 
 def allow_and_register_initiative(text: str) -> tuple[bool, str]:
@@ -369,17 +443,37 @@ def allow_and_register_initiative(text: str) -> tuple[bool, str]:
     emit直前の“最終ゲート”
     - いま発火して良いか再チェック（ここが漏れ止め）
     - 重複チェック
+    - 判定結果を必ず1行ログに出す（観測）
     """
     now = time.time()
+
     ok, reason = should_fire_initiative(now)
     if not ok:
+        log_initiative_gate(now, reason, text)
         return False, reason
 
     if _initiative_is_duplicate(text):
+        log_initiative_gate(now, "duplicate", text)
         return False, "duplicate"
 
     _initiative_register(text)
+    log_initiative_gate(now, "ok", text)
     return True, "ok"
+
+
+def emit_initiative(text: str) -> bool:
+    """
+    initiative を出す唯一の出口（ここを通さないと喋れない）
+    """
+    ok, reason = allow_and_register_initiative(text)
+    if not ok:
+        set_initiative_state("OFF", reason)
+        return False
+
+    print(f"{NOAH_NAME} > {text}")
+    save_log("(initiative)", text)
+    ui_emit("SAY", text, emotion="idle")
+    return True
 
 
 def detect_user_wants_examples(text: str) -> bool:
@@ -396,8 +490,8 @@ def detect_stop_signal(text: str) -> bool:
     if not t:
         return False
     stop_words = [
-        "やめて", "やめよう", "黙って", "いまはいい", "今はいい", "放っておいて",
-        "しんどい", "また今度", "後で", "今日はやめたい"
+        "やめて", "やめよう", "黙っ", "いまはいい", "今はいい", "放っておいて",
+        "しんどい", "また今度", "後で", "今日はやめたい","静かに"
     ]
     return any(w in t for w in stop_words)
 
@@ -958,7 +1052,7 @@ def initiative_loop():
             ok, reason = should_fire_initiative(now)
             if not ok:
                 # 状態表示（見える化）
-                if reason in ("muted", "conversation_active"):
+                if reason in ("muted", "conversation_active", "ipc_busy"):
                     set_initiative_state("OFF", reason)
 
                 # muted中は軽く寝て再判定（CPUを回さない）
@@ -974,8 +1068,7 @@ def initiative_loop():
 
             text = generate_initiative()
 
-            # ===== D2: 直近文面重複禁止（直近N件）＋ emit直前の最終ゲート =====
-            # まず重複なら再生成（最大1回）
+            # 重複なら再生成（最大1回）
             if _initiative_is_duplicate(text):
                 text2 = generate_initiative()
                 if _initiative_is_duplicate(text2):
@@ -983,16 +1076,9 @@ def initiative_loop():
                     continue
                 text = text2
 
-            # ここが最重要：emit直前に「muted / ipc_busy / 会話中」などを再チェック
-            ok2, reason2 = allow_and_register_initiative(text)
-            if not ok2:
-                set_initiative_state("OFF", reason2)
+            # 出口は必ず1本
+            if not emit_initiative(text):
                 continue
-            # ===============================================
-
-            print(f"{NOAH_NAME} > {text}")
-            save_log("(initiative)", text)
-            ui_emit("SAY", text, emotion="idle")
 
             with _state_lock:
                 _last_noah_initiative_at = time.time()
