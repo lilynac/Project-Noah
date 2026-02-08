@@ -7,19 +7,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 
 # Noah 本体から必要なものを import
-from .Noah import (
-    generate_reply,
-    normalize_input,
-    detect_stop_signal,
-    save_log,
-    ui_emit,
-    log_error,
-    mute_initiative,
-    INITIATIVE_MUTE_SECONDS,
-    ipc_begin,
-    ipc_end,
-    note_user_activity,
-)
+import importlib
+
+Noah = importlib.import_module(__package__ + ".Noah")
+
+generate_reply = Noah.generate_reply
+normalize_input = Noah.normalize_input
+detect_stop_signal = Noah.detect_stop_signal
+save_log = Noah.save_log
+ui_emit = Noah.ui_emit
+log_error = Noah.log_error
+mute_initiative = Noah.mute_initiative
+INITIATIVE_MUTE_SECONDS = Noah.INITIATIVE_MUTE_SECONDS
+ipc_begin = Noah.ipc_begin
+ipc_end = Noah.ipc_end
+note_user_activity = Noah.note_user_activity
 
 # menubar側と合わせる（必要なら変更）
 HOST = "127.0.0.1"
@@ -74,12 +76,11 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
 
     # ---- 互換: Talk用のPOSTエンドポイントとJSONキー吸収 ----
     def do_POST(self) -> None:
-        # /chat だけでなく /talk も受ける
         if self.path not in ("/chat", "/talk"):
             self._send_json(404, {"error": "not found"})
             return
 
-        # ★ D2: IPC会話中は initiative を絶対に出さない（in-flight ガード）
+        # ★ D2: IPCのやり取り中は initiative を絶対に出さない
         ipc_begin()
         try:
             try:
@@ -99,10 +100,9 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "message is required"})
                 return
 
-            # ★ D2: IPC経由でも「ユーザー発話が来た」時刻を必ず更新
+            # ★ D2: menubar経由でも「ユーザー発話が来た」を必ず記録
             note_user_activity()
 
-            # stop signal
             if detect_stop_signal(message):
                 reply = "うん、わかった。しばらく静かにしてるね。"
                 mute_initiative(INITIATIVE_MUTE_SECONDS, reason="stop_signal_ipc")
@@ -114,7 +114,6 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"reply": reply, "text": reply})
                 return
 
-            # 通常応答
             try:
                 reply = generate_reply(message)
             except Exception as e:

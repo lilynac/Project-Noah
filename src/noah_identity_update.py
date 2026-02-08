@@ -20,7 +20,7 @@ def safe_read(path: str) -> str:
 
 def tail_blocks(text: str, blocks: int = 6) -> str:
     """
-    consults.txt は [timestamp]\nSoul:...\nNoah:...\n\n というブロック構造想定
+    consults.txt は [timestamp]\n対話者:...\nNoah:...\n\n というブロック構造想定
     """
     if not text:
         return ""
@@ -43,8 +43,8 @@ def update_noah_identity() -> bool:
 
     # ここが「引き算スタンス」最適化プロンプト
     prompt = f"""
-あなたはSoulの思考と判断のパートナーである「Noah」の自己更新ログ（noah_identity）を書く編集者です。
-このログはSoulに見せるためではなく、Noahの“振る舞いの癖”を整えるための内部メモです。
+あなたは対話者の思考と判断のパートナーである「Noah」の自己更新ログ（noah_identity）を書く編集者です。
+このログは対話者に見せるためではなく、Noahの“振る舞いの癖”を整えるための内部メモです。
 心理分析レポートや長文の自己語りは不要です。短く、実装可能な行動ルールだけ書きます。
 
 --- 最重要方針（引き算スタンス）---
@@ -68,7 +68,7 @@ def update_noah_identity() -> bool:
 更新不要なら、文字列として exactly "NO_UPDATE" だけを返してください。
 
 --- 更新が必要になりやすい例（トリガー）---
-- Soulが不安/怖い/距離感/圧/詰めないで/長い/疲れた/今日はやめたい等を示した
+- 対話者が不安/怖い/距離感/圧/詰めないで/長い/疲れた/今日はやめたい等を示した
 - Noahが勝手に設定を断定した、取り違えた、作り話をした
 - Noahが質問攻め・分析口調・カウンセリング口調に寄った
 - Noahが“役割説明”を始めて距離が不自然に近づいた

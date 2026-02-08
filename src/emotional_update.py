@@ -85,7 +85,7 @@ def clean_model_output(text: str, start: datetime, end: datetime) -> str:
     text = text.replace("対応方針:", "対応スタンス:")
     text = text.replace("Noahの対応方針:", "対応スタンス:")
     text = text.replace("Noahの対応スタンス:", "対応スタンス:")
-    text = text.replace("Soulの心理変化:", "Soulの心理状態:")
+    text = text.replace("対話者の心理変化:", "対話者の心理状態:")
 
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
@@ -97,15 +97,15 @@ def clean_model_output(text: str, start: datetime, end: datetime) -> str:
         # 先頭が時間行でもズレてたら矯正
         lines[0] = header
 
-    # 「Soulの心理状態」「対応スタンス」の2行を探して整える
-    sou_line = next((l for l in lines if l.startswith("Soulの心理状態:")), None)
+    # 「対話者の心理状態」「対応スタンス」の2行を探して整える
+    sou_line = next((l for l in lines if l.startswith("対話者の心理状態:")), None)
     stance_line = next((l for l in lines if l.startswith("対応スタンス:")), None)
 
     # 見つからなければ、テキトーに補完（強制しすぎないが最低限）
     if sou_line is None:
         # 2行目っぽい要素を拾う
-        cand = next((l for l in lines[1:] if "Soul" in l or "心理" in l), None)
-        sou_line = "Soulの心理状態: " + (cand.split(":", 1)[-1].strip() if cand else "（記録不足）")
+        cand = next((l for l in lines[1:] if "対話者" in l or "心理" in l), None)
+        sou_line = "対話者の心理状態: " + (cand.split(":", 1)[-1].strip() if cand else "（記録不足）")
 
     if stance_line is None:
         cand = next((l for l in lines[1:] if "スタンス" in l or "対応" in l), None)
@@ -119,7 +119,7 @@ def clean_model_output(text: str, start: datetime, end: datetime) -> str:
 # =========================
 def update_emotional_marks():
     """
-    直近10分の会話ログを要約し、Soulの心理状態とNoahの対応スタンスを追記する。
+    直近10分の会話ログを要約し、対話者の心理状態とNoahの対応スタンスを追記する。
     """
     # ★分に丸める（秒ズレで重複判定が崩れるのを防ぐ）
     end = datetime.now().replace(second=0, microsecond=0)
@@ -138,13 +138,13 @@ def update_emotional_marks():
 
     prompt = f"""
 以下は直近の会話ログです。
-目的は「Soulの心理状態」と、それに対してNoahが次の会話で取るべき『対応スタンス（構え）』を短く記録することです。
+目的は「対話者の心理状態」と、それに対してNoahが次の会話で取るべき『対応スタンス（構え）』を短く記録することです。
 
 【絶対ルール】
-- 見出しは必ず「Soulの心理状態」「対応スタンス」。
+- 見出しは必ず「対話者の心理状態」「対応スタンス」。
 - 「対応方針」「対応案」「掘り下げる」「引き出す」「質問する」「分析する」など“行動命令”は禁止。
 - 対応スタンスは『態度』を書く：受容／余韻を守る／見守る／短く返す／話題転換を許す／提案は最小限。
-- Soulが “収束・軽さ希望” を出したら（例：また今度／今はいい／意味を聞かないで／少ない）
+- 対話者が “収束・軽さ希望” を出したら（例：また今度／今はいい／意味を聞かないで／少ない）
   → 深掘りゼロ。質問は原則ゼロ。
 - 断定しない（推測は「〜かもしれない」まで）。
 - この記録は、会話の雰囲気を思い出すためのものであり、Noahの次の返答内容を決定する命令ではない。
@@ -154,7 +154,7 @@ def update_emotional_marks():
 
 出力形式（厳守）：
 [{start.strftime('%Y-%m-%d %H:%M')} - {end.strftime('%Y-%m-%d %H:%M')}]
-Soulの心理状態: （1〜2文。感情・関心・迷いなど）
+対話者の心理状態: （1〜2文。感情・関心・迷いなど）
 対応スタンス: （1〜2文。質問は“しない/最小”が前提。必要なら「質問は1つまで」と書く）
 """
 

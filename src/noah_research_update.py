@@ -96,7 +96,7 @@ def _extract_candidate_phrases(text: str) -> list[str]:
     # 例：カタカナ、アルファベット、漢字の連なりをざっくり拾う
     tokens = re.findall(r"[ァ-ヶー]{3,}|[A-Za-z0-9\-\_]{3,}|[一-龠]{2,}", text)
     # ノイズ削減
-    stop = {"Soul", "Noah", "initiative", "対応", "心理", "スタンス", "今日", "最近"}
+    stop = {"対話者", "Noah", "initiative", "対応", "心理", "スタンス", "今日", "最近"}
     tokens = [t for t in tokens if t not in stop]
     # 頻出の上位だけ（無制限にしない）
     freq = {}
@@ -111,7 +111,7 @@ def _extract_candidate_phrases(text: str) -> list[str]:
 # =========================
 def update_noah_research() -> bool:
     """
-    直近ログから、Soulの関心の“芽”を hidden に短文保存する。
+    直近ログから、対話者の関心の“芽”を hidden に短文保存する。
     - 会話文は生成しない
     - 断定しない
     - 調べすぎない（短い）
@@ -133,7 +133,7 @@ def update_noah_research() -> bool:
     candidates = _extract_candidate_phrases(recent_logs)
 
     prompt = f"""
-あなたは「Noah」の内部メモ（Soulには見せない）を書く編集者です。
+あなたは「Noah」の内部メモ（対話者には見せない）を書く編集者です。
 目的は “次の会話で圧をかけずに寄り添うための背景理解” であり、会話文や提案文は書きません。
 
 【絶対ルール】
