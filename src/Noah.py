@@ -395,10 +395,6 @@ def mute_initiative(seconds: int, reason: str = "stop_signal") -> None:
 
 
 def should_fire_initiative(now: float) -> tuple[bool, str]:
-    """
-    initiativeの発火条件（D2）をここに集約
-    戻り値: (発火OK?, 理由)
-    """
     # --- D4 suppression gate: 抑制中は発火させない ---
     try:
         sup = _sup_load(SUPPRESSION_PATH)
@@ -494,7 +490,6 @@ def emit_initiative(text: str) -> bool:
         set_initiative_state("OFF", reason)
         return False
 
-    print(f"{NOAH_NAME} > {text}")
     save_log("(initiative)", text)
     ui_emit("SAY", text, emotion="idle")
     return True
