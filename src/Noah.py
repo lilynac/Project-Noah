@@ -188,10 +188,6 @@ def _hash_text(text: str) -> str:
 
 
 def _hash_short(text: str) -> str:
-    """
-    initiative重複判定用の短縮hash
-    - normalize_input で揺れを減らしてから _hash_text
-    """
     try:
         t = normalize_input(text or "")
     except Exception:
@@ -201,9 +197,6 @@ def _hash_short(text: str) -> str:
 
 
 def log_error(kind: str, err: Exception, context: dict | None = None) -> None:
-    """
-    D1: API失敗/IPC失敗/ファイル欠損でもクラッシュさせず、原因を logs/noah.log に残す
-    """
     try:
         logger = _get_logger()
         ctx = dict(context or {})
@@ -224,12 +217,6 @@ def log_error(kind: str, err: Exception, context: dict | None = None) -> None:
     
 
 def log_initiative_gate(now: float, reason: str, text: str = "") -> None:
-    """
-    initiative の最終ゲート判定を1行でログ出力する（D2観測用）
-    出す項目:
-      now / reason / mute_remaining_sec / ipc_in_flight /
-      now-last_user_at / now-last_noah_initiative_at / text_hash
-    """
     try:
         with _state_lock:
             last_user = _last_user_at
@@ -272,7 +259,6 @@ def log_initiative_gate(now: float, reason: str, text: str = "") -> None:
 
 
 def _sanitize_history(items) -> list[dict]:
-    """壊れたJSONや変な型を弾きつつ、role/content だけ残す"""
     out = []
     if not isinstance(items, list):
         return out
@@ -297,7 +283,6 @@ def _sanitize_history(items) -> list[dict]:
 
 
 def load_conversation_history() -> None:
-    """起動時に1回だけ呼ぶ想定。失敗しても落ちない。"""
     path = _conversation_persist_path()
     try:
         if not os.path.exists(path):
@@ -318,7 +303,6 @@ def load_conversation_history() -> None:
 
 
 def persist_conversation_history() -> None:
-    """履歴更新のたびに呼んでOK。小さいJSONなので最小実装でいく。"""
     path = _conversation_persist_path()
     try:
         import json
@@ -346,28 +330,21 @@ _ipc_in_flight: int = 0
 _recent_initiative_hashes = deque(maxlen=12)  # 直近12件ぶんのhashを保持
 
 def ipc_begin() -> None:
-    """service.py がIPC処理を始める直前に呼ぶ"""
     global _ipc_in_flight
     with _state_lock:
         _ipc_in_flight += 1
 
 def ipc_end() -> None:
-    """service.py がIPC処理を終えた直後に呼ぶ（finallyで必ず）"""
     global _ipc_in_flight
     with _state_lock:
         _ipc_in_flight = max(0, _ipc_in_flight - 1)
 
 def note_user_activity() -> None:
-    """CLI/IPCどちらでも、ユーザー発話が来たら必ず呼ぶ（会話中抑制の根幹）"""
     global _last_user_at
     with _state_lock:
         _last_user_at = time.time()
 
 def set_initiative_state(state: str, reason: str = "") -> None:
-    """
-    state: "ON" or "OFF"
-    UI表示用
-    """
     global _initiative_state_last
     try:
         if state == _initiative_state_last:
@@ -379,9 +356,6 @@ def set_initiative_state(state: str, reason: str = "") -> None:
         log_error("INITIATIVE_STATE", e, {"state": state, "reason": reason})
 
 def mute_initiative(seconds: int, reason: str = "stop_signal") -> None:
-    """
-    stop signal（やめて/静かに）を受けたらここに集約して必ずクールダウン
-    """
     global _initiative_muted_until
     try:
         with _state_lock:
@@ -402,10 +376,7 @@ def should_fire_initiative(now: float) -> tuple[bool, str]:
             return False, "suppressed"
     except Exception:
         pass
-    """
-    initiativeの発火条件（D2）をここに集約
-    戻り値: (発火OK?, 理由)
-    """
+
     with _state_lock:
         last_user = _last_user_at
         last_noah = _last_noah_initiative_at
@@ -443,26 +414,14 @@ def should_fire_initiative(now: float) -> tuple[bool, str]:
     return True, "ok"
 
 def _initiative_is_duplicate(text: str) -> bool:
-    """
-    直近N件のhashに含まれていたら重複扱い
-    """
     h = _hash_short(text)
     return h in _recent_initiative_hashes
 
 def _initiative_register(text: str) -> None:
-    """
-    採用したinitiativeのhashを登録
-    """
     h = _hash_short(text)
     _recent_initiative_hashes.append(h)
 
 def allow_and_register_initiative(text: str) -> tuple[bool, str]:
-    """
-    emit直前の“最終ゲート”
-    - いま発火して良いか再チェック（ここが漏れ止め）
-    - 重複チェック
-    - 判定結果を必ず1行ログに出す（観測）
-    """
     now = time.time()
 
     ok, reason = should_fire_initiative(now)
@@ -482,9 +441,7 @@ def allow_and_register_initiative(text: str) -> tuple[bool, str]:
 def emit_initiative(text: str) -> bool:
     logger = _get_logger()
     logger.info(f"EMIT_TRY now={time.time():.3f} text_hash={_hash_short(text)}")
-    """
-    initiative を出す唯一の出口（ここを通さないと喋れない）
-    """
+
     ok, reason = allow_and_register_initiative(text)
     if not ok:
         set_initiative_state("OFF", reason)
@@ -1047,7 +1004,7 @@ def noah_identity_update_loop():
         try:
             update_noah_identity()
         except Exception as e:
-            print(f"Noahバックグラウンド更新(identity)でエラー: {e}")
+            log_error("BG_IDENTITY", e, {})
         time.sleep(NOAH_IDENTITY_UPDATE_INTERVAL)
 
 
@@ -1056,7 +1013,7 @@ def preferences_update_loop():
         try:
             update_preferences()
         except Exception as e:
-            print(f"preferences update error: {e}")
+            log_error("BG_PREFERENCES", e, {})
         time.sleep(60 * 60)
 
 
@@ -1065,7 +1022,7 @@ def noah_research_update_loop():
         try:
             update_noah_research()
         except Exception as e:
-            print(f"noah_research update error: {e}")
+            log_error("BG_RESEARCH", e, {})
         time.sleep(60 * 60)
 
 
@@ -1074,7 +1031,7 @@ def research_promote_loop():
         try:
             promote_research_topics()
         except Exception as e:
-            print(f"research promote error: {e}")
+            log_error("BG_RESEARCH_PROMOTE", e, {})
         time.sleep(60 * 60 * 6)
 
 
