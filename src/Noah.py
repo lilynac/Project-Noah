@@ -1036,14 +1036,25 @@ def research_promote_loop():
 
 
 def initiative_loop():
+    """
+    initiative 自発発話ループ（D2/D4の観測点）
+    - ループ開始/生存をログで可視化
+    - should_fire_initiative の precheck で止まった理由も必ずログ化
+    """
     global _last_noah_initiative_at, _initiative_count
     global _last_initiative_text, _last_initiative_hash
 
+    logger = _get_logger()
+    logger.info("INITIATIVE_LOOP_START")
+
+    # 起動直後に即走らないよう少し待つ（既存仕様）
     time.sleep(random.uniform(20, 60))
 
     while True:
         try:
-            time.sleep(_next_initiative_delay())
+            delay = _next_initiative_delay()
+            logger.info(f"INITIATIVE_LOOP_TICK delay={delay:.1f}")
+            time.sleep(delay)
 
             now = time.time()
             ok, reason = should_fire_initiative(now)
