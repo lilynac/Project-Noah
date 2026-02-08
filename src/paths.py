@@ -29,4 +29,4 @@ NOAH_RESEARCH_PATH = str(NOTES_HIDDEN_DIR / "noah_research.txt")
 RESEARCH_USAGE_LOG_PATH = str(NOTES_HIDDEN_DIR / "research_usage_log.txt")
 
 RESEARCH_PROMOTED_PATH = str(MEMORY_DIR / "research_promoted.txt")
-SUPPRESSION_PATH = str(MEMORY_DIR / "suppression.json")
+

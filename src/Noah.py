@@ -395,12 +395,16 @@ def mute_initiative(seconds: int, reason: str = "stop_signal") -> None:
 
 
 def should_fire_initiative(now: float) -> tuple[bool, str]:
+    """
+    initiativeの発火条件（D2）をここに集約
+    戻り値: (発火OK?, 理由)
+    """
+    # --- D4 suppression gate: 抑制中は発火させない ---
     try:
         sup = _sup_load(SUPPRESSION_PATH)
         if _sup_is_suppressed(sup):
             return False, "suppressed"
     except Exception:
-        # suppressionが読めなくても落とさない（既存ロジックに委ねる）
         pass
     """
     initiativeの発火条件（D2）をここに集約
@@ -1039,7 +1043,7 @@ def emotional_update_loop():
         try:
             update_emotional_marks()
         except Exception as e:
-            print(f"Noahバックグラウンド更新(emotional)でエラー: {e}")
+            log_error("BG_EMOTIONAL", e, {})
         time.sleep(EMOTIONAL_UPDATE_INTERVAL)
 
 
