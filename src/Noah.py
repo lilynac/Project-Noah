@@ -1048,8 +1048,11 @@ def initiative_loop():
             now = time.time()
             ok, reason = should_fire_initiative(now)
             if not ok:
+                # ★ ここで必ずゲート理由をログに残す（D4証跡）
+                log_initiative_gate(now, reason, "(precheck)")
+
                 # 状態表示（見える化）
-                if reason in ("muted", "conversation_active", "ipc_busy"):
+                if reason in ("muted", "conversation_active", "ipc_busy", "suppressed"):
                     set_initiative_state("OFF", reason)
 
                 # muted中は軽く寝て再判定（CPUを回さない）
