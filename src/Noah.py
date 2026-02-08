@@ -25,7 +25,7 @@ from pathlib import Path
 import signal
 
 from .noah_config import load_runtime_config, RuntimeConfig
-from .log_setup import get_logger, ensure_pid_lock_or_exit, cleanup_pid_l
+from .log_setup import get_logger, ensure_pid_lock_or_exit, cleanup_pid_lock
 
 from .emotional_update import update_emotional_marks
 from .noah_identity_update import update_noah_identity
@@ -44,6 +44,15 @@ from .paths import (
     NOAH_RESEARCH_PATH,
     RESEARCH_USAGE_LOG_PATH,
     RESEARCH_PROMOTED_PATH,
+    SUPPRESSION_PATH,
+)
+from .suppression import (
+    _sup_load,
+    _sup_save,
+    _sup_detect,
+    _sup_update,
+    _sup_is_suppressed,
+    _sup_system_prompt
 )
 
 # =========================
@@ -167,6 +176,7 @@ def _get_logger() -> logging.Logger:
         max_bytes=CFG.log_max_bytes,
         backup_count=CFG.log_backup_count,
     )
+    _logger.info("NOAH_LOGGER_READY log_dir=%s abs=%s", str(CFG.log_dir), str(CFG.log_dir.resolve()))
     return _logger
 
 def _safe_preview(text: str, n: int = 80) -> str:
@@ -329,8 +339,6 @@ def persist_conversation_history() -> None:
 # =========================
 from collections import deque
 
-INITIATIVE_CONVERSATION_BLOCK = 5 * 60  # 最後のユーザー発話から5分は抑制（会話中扱い）
-
 # IPCで会話が「処理中」かどうか（in-flight）
 _ipc_in_flight: int = 0
 
@@ -387,6 +395,13 @@ def mute_initiative(seconds: int, reason: str = "stop_signal") -> None:
 
 
 def should_fire_initiative(now: float) -> tuple[bool, str]:
+    try:
+        sup = _sup_load(SUPPRESSION_PATH)
+        if _sup_is_suppressed(sup):
+            return False, "suppressed"
+    except Exception:
+        # suppressionが読めなくても落とさない（既存ロジックに委ねる）
+        pass
     """
     initiativeの発火条件（D2）をここに集約
     戻り値: (発火OK?, 理由)
@@ -603,7 +618,23 @@ def log_research_usage(source: str, used: bool):
 # Core Logic
 # =========================
 def build_messages(user_input: str):
+    # --- D4 suppression（永続）: 検知→必ず更新→保存 ---
+    # ここは build_messages の最上段で毎回必ず走らせる
+    try:
+        sup = _sup_load(SUPPRESSION_PATH)
+        signals = _sup_detect(user_input)
+        sup = _sup_update(sup, signals, cooldown_turns=3, cooldown_minutes=5)
+        _sup_save(SUPPRESSION_PATH, sup)
+        sup_prompt = _sup_system_prompt(sup)
+    except Exception:
+        # suppressionが壊れても会話自体は落とさない（D4の確実性優先）
+        sup_prompt = None
+
     messages = [{"role": "system", "content": SYSTEM_CORE_PROMPT}]
+
+    # suppression 状態を常時注入（モデル側にも「今は広げない」を伝える）
+    if sup_prompt:
+        messages.append({"role": "system", "content": sup_prompt})
 
     # 委任モード
     if detect_delegation(user_input):
@@ -631,7 +662,7 @@ def build_messages(user_input: str):
                 f"{state}"
             )
         })
-    
+
     # 質問が多いと指摘されたら、質問を止める（しばらく）
     if detect_question_complaint(user_input):
         messages.append({
@@ -644,9 +675,11 @@ def build_messages(user_input: str):
                 "同じ定型句（いつでも〜、気になること〜）を繰り返さない。"
             )
         })
+
     with _conversation_lock:
         if CONVERSATION_HISTORY:
             messages.extend(CONVERSATION_HISTORY)
+
     messages.append({"role": "user", "content": user_input})
     return messages
 
@@ -946,6 +979,9 @@ def _next_initiative_delay() -> int:
 # Loops / Entry
 # =========================
 def startup_sequence():
+    logger = _get_logger()
+    logger.info("NOAH_STARTUP logger_ready log_dir=%s abs=%s", str(CFG.log_dir), str(CFG.log_dir.resolve()))
+
     global _startup_research_used, _research_injected_today, _last_research_injected_date
 
     load_conversation_history()

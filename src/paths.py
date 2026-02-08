@@ -6,6 +6,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DATA_DIR = PROJECT_ROOT / "data"
 MEMORY_DIR = DATA_DIR / "memory"
+SUPPRESSION_PATH = str(MEMORY_DIR / "suppression.json")
 NOTES_DIR = DATA_DIR / "notes"
 
 # memory（Noahが読み書きする“記憶”系）
@@ -28,3 +29,4 @@ NOAH_RESEARCH_PATH = str(NOTES_HIDDEN_DIR / "noah_research.txt")
 RESEARCH_USAGE_LOG_PATH = str(NOTES_HIDDEN_DIR / "research_usage_log.txt")
 
 RESEARCH_PROMOTED_PATH = str(MEMORY_DIR / "research_promoted.txt")
+SUPPRESSION_PATH = str(MEMORY_DIR / "suppression.json")

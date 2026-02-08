@@ -44,6 +44,12 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
     # 標準のHTTPログがうるさいなら有効化（Sprint2の「うるさくない」寄り）
     # def log_message(self, format, *args):
     #     return
+    def _client_ip(self) -> str:
+        try:
+            return str(self.client_address[0])
+        except Exception:
+            return "unknown"
+
 
     def _send_json(self, status: int, payload: Dict[str, Any]) -> None:
         try:
@@ -81,14 +87,25 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
 
     # ---- 互換: Start/Working用の疎通エンドポイント ----
     def do_GET(self) -> None:
-        if self.path in ("/", "/health", "/status"):
+        path = getattr(self, "path", "")
+        _SLOG.info("IPC_GET_BEGIN path=%s ip=%s", path, self._client_ip())
+
+        if path in ("/", "/health", "/status"):
+            _SLOG.info("IPC_GET_OK path=%s ip=%s", path, self._client_ip())
             self._send_json(200, {"ok": True, "service": "noah", "ts": time.time()})
             return
+
+        _SLOG.info("IPC_GET_404 path=%s ip=%s", path, self._client_ip())
         self._send_json(404, {"ok": False, "error": "not found"})
 
     # ---- 互換: Talk用のPOSTエンドポイントとJSONキー吸収 ----
     def do_POST(self) -> None:
-        if self.path not in ("/chat", "/talk"):
+        path = getattr(self, "path", "")
+        ip = self._client_ip()
+        _SLOG.info("IPC_POST_BEGIN path=%s ip=%s", path, ip)
+
+        if path not in ("/chat", "/talk"):
+            _SLOG.info("IPC_POST_404 path=%s ip=%s", path, ip)
             self._send_json(404, {"error": "not found"})
             return
 
@@ -98,6 +115,7 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
             try:
                 body = self._read_json()
             except Exception:
+                _SLOG.info("IPC_POST_400_BAD_JSON path=%s ip=%s", path, ip)
                 self._send_json(400, {"error": "invalid json"})
                 return
 
@@ -109,27 +127,36 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
 
             message = normalize_input(str(raw_msg or ""))
             if not message:
+                _SLOG.info("IPC_POST_400_EMPTY_MESSAGE path=%s ip=%s", path, ip)
                 self._send_json(400, {"error": "message is required"})
                 return
+
+            _SLOG.info("IPC_POST_MESSAGE path=%s ip=%s msg_len=%s", path, ip, len(message))
 
             # ★ D2: menubar経由でも「ユーザー発話が来た」を必ず記録
             note_user_activity()
 
             if detect_stop_signal(message):
                 reply = "うん、わかった。しばらく静かにしてるね。"
+                _SLOG.info("IPC_POST_STOP_SIGNAL path=%s ip=%s mute_sec=%s", path, ip, INITIATIVE_MUTE_SECONDS)
+
                 mute_initiative(INITIATIVE_MUTE_SECONDS, reason="stop_signal_ipc")
                 try:
                     save_log(message, reply)
                     ui_emit("SAY", reply, emotion="soft_smile")
                 except Exception as e:
                     log_error("UI_EMIT_OR_LOG", e, {"phase": "stop_signal"})
+                    _SLOG.exception("IPC_POST_STOP_SIGNAL_SIDE_EFFECT_FAIL path=%s ip=%s", path, ip)
+
                 self._send_json(200, {"reply": reply, "text": reply})
+                _SLOG.info("IPC_POST_END path=%s ip=%s status=200 reply_len=%s", path, ip, len(reply))
                 return
 
             try:
                 reply = generate_reply(message)
             except Exception as e:
                 log_error("API_OR_REPLY", e, {"phase": "generate_reply"})
+                _SLOG.exception("IPC_POST_GENERATE_REPLY_FAIL path=%s ip=%s", path, ip)
                 reply = "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
 
             try:
@@ -137,8 +164,10 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
                 ui_emit("SAY", reply, emotion="soft_smile")
             except Exception as e:
                 log_error("UI_EMIT_OR_LOG", e, {"phase": "normal_reply"})
+                _SLOG.exception("IPC_POST_REPLY_SIDE_EFFECT_FAIL path=%s ip=%s", path, ip)
 
             self._send_json(200, {"reply": reply, "text": reply})
+            _SLOG.info("IPC_POST_END path=%s ip=%s status=200 reply_len=%s", path, ip, len(reply))
 
         finally:
             ipc_end()
