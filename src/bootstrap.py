@@ -67,7 +67,16 @@ def bootstrap_files() -> None:
     _touch_file(NOAH_IDENTITY_PATH, initial_text=noah_identity_template)
 
     # mode はデフォルト値を入れる（無いと分岐で困ることが多い）
-    _touch_file(MODE_PATH, initial_text="chat\n")
+    _touch_file(
+        MODE_PATH,
+        initial_text=(
+            "mode: normal\n"
+            "since:\n"
+            "set_by: bootstrap\n"
+            "note:\n"
+        ),
+    )
+
 
     # --- notes（人間が手で書くメモ） ---
     _touch_file(IDEAS_PATH)

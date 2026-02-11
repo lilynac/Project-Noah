@@ -1435,7 +1435,7 @@ def research_promote_loop():
         time.sleep(60 * 60 * 6)
 
 
-def initiative_loop():
+def initiative_loop(stop_event=None):
     """
     initiative 自発発話ループ（D2/D4の観測点）
     - ループ開始/生存をログで可視化
@@ -1448,9 +1448,21 @@ def initiative_loop():
     logger.info("INITIATIVE_LOOP_START")
 
     # 起動直後に即走らないよう少し待つ（既存仕様）
-    time.sleep(random.uniform(20, 60))
+    initial_wait = random.uniform(20, 60)
+    end_at = time.time() + initial_wait
+    while time.time() < end_at:
+        if stop_event is not None and stop_event.is_set():
+            logger.info("INITIATIVE_LOOP_STOP")
+            return
+        time.sleep(0.2)
     
     while True:
+        if stop_event is not None and stop_event.is_set():
+            try:
+                _get_logger().info("INITIATIVE_LOOP_STOP")
+            except Exception:
+                pass
+            return
         try:
             delay = _next_initiative_delay()
             if DEBUG_INITIATIVE_LOOP:

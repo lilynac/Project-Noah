@@ -202,7 +202,7 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
             ipc_end()
 
 
-def run_http_service(host: str = HOST, port: int = PORT) -> None:
+def run_http_service(host: str = HOST, port: int = PORT, stop_event=None) -> None:
     try:
         httpd = ThreadingHTTPServer((host, port), NoahIPCHandler)
     except OSError as e:
@@ -211,9 +211,20 @@ def run_http_service(host: str = HOST, port: int = PORT) -> None:
             return
         raise
 
+    # stop_event を見るために、handle_request が定期的に戻るようにする
+    httpd.timeout = 0.5
+
     print(f"[Noah IPC] listening on http://{host}:{port}")
     try:
-        httpd.serve_forever()
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                break
+            httpd.handle_request()
     except Exception as e:
         log_error("IPC_SERVER", e, {"host": host, "port": port})
-        return
+    finally:
+        try:
+            httpd.server_close()
+        except Exception:
+            pass
+        print("[Noah IPC] server stopped")
