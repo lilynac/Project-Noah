@@ -122,7 +122,15 @@ for _p in _env_candidates:
 else:
     load_dotenv()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+_api_key = os.getenv("OPENAI_API_KEY")
+try:
+    client = OpenAI(api_key=_api_key) if _api_key else None
+except Exception as e:
+    client = None
+    try:
+        get_logger().warning(f"OPENAI_CLIENT_INIT_FAILED: {e}")
+    except Exception:
+        print(f"[WARN] OPENAI_CLIENT_INIT_FAILED: {e}")
 
 CFG: RuntimeConfig = load_runtime_config(base_dir=Path(__file__).resolve().parents[1])
 
