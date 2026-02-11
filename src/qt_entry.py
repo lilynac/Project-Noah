@@ -77,14 +77,38 @@ def main():
 
     # ---- Tray deps ----
     def send_user_utterance(text: str):
-        try:
-            reply = _post_chat(text, timeout=60.0)
-            print(f"[Reply] {reply}")
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            print(f"[ERROR] HTTP {e.code}: {body}")
-        except Exception as e:
-            print(f"[ERROR] {repr(e)}")
+        # UIを固めない：通信は別スレッドで実行する
+        def worker():
+            try:
+                reply = _post_chat(text, timeout=60.0)
+                print(f"[Reply] {reply}")
+
+                # 返信をOverlayにも出す（ログだけでも可だが、見える方が安心）
+                try:
+                    from . import Noah as noah
+                    noah.ui_emit("SAY", reply, emotion="idle")
+                except Exception:
+                    pass
+
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace")
+                print(f"[ERROR] HTTP {e.code}: {body}")
+                try:
+                    from . import Noah as noah
+                    noah.ui_emit("SAY", "送信に失敗した。", emotion="idle")
+                except Exception:
+                    pass
+
+            except Exception as e:
+                print(f"[ERROR] {repr(e)}")
+                try:
+                    from . import Noah as noah
+                    noah.ui_emit("SAY", "送信に失敗した。", emotion="idle")
+                except Exception:
+                    pass
+
+        Thread(target=worker, daemon=True).start()
+
 
 
     def set_mode(mode: str):
