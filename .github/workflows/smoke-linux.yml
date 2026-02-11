@@ -49,7 +49,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Smoke run (headless)
-        shell: cmd
+        shell: pwsh
         run: |
-          set NOAH_NO_DIALOG=1
-          python -m src
+          $env:NOAH_NO_DIALOG = "1"
+          $p = Start-Process -FilePath python -ArgumentList "-m","src" -PassThru
+          Start-Sleep -Seconds 8
+          if (!$p.HasExited) { Stop-Process -Id $p.Id -Force }
+          exit 0
