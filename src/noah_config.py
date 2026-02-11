@@ -48,7 +48,7 @@ def load_runtime_config(base_dir: Path | None = None) -> RuntimeConfig:
     base_dir は既定値（logs/run の置き場）を決めるために使う。
     """
     if base_dir is None:
-        base_dir = Path(__file__).resolve().parent
+        base_dir = Path(__file__).resolve().parents[1]
 
     default_log_dir = base_dir / "logs"
     default_run_dir = base_dir / "run"

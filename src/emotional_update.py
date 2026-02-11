@@ -155,7 +155,7 @@ def update_emotional_marks():
 出力形式（厳守）：
 [{start.strftime('%Y-%m-%d %H:%M')} - {end.strftime('%Y-%m-%d %H:%M')}]
 対話者の心理状態: （1〜2文。感情・関心・迷いなど）
-対応スタンス: （1〜2文。質問は“しない/最小”が前提。必要なら「質問は1つまで」と書く）
+対応スタンス: （1〜2文。質問は“しない/最小”が前提。）
 """
 
     raw = call_responses_text(

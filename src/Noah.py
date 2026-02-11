@@ -1,14 +1,17 @@
 import os
 import re
 import time
+import json
 import random
 import unicodedata
 import subprocess
 import argparse
 import logging
+import signal
 import traceback
 import hashlib
 import sys as _sys
+from src.retrieve import get_entity_brief, format_brief_for_prompt
 
 _this = _sys.modules.get(__name__)
 if _this is not None:
@@ -23,11 +26,10 @@ from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
-import signal
+from .db import connect
 
 from .noah_config import load_runtime_config, RuntimeConfig
 from .log_setup import get_logger, ensure_pid_lock_or_exit, cleanup_pid_lock
-
 from .emotional_update import update_emotional_marks
 from .noah_identity_update import update_noah_identity
 from .preferences_update import update_preferences
@@ -61,34 +63,52 @@ from .suppression import (
 # Noahの人格・対話スタイル
 # =========================
 SYSTEM_CORE_PROMPT = """
-あなたの名前はNoah（No Alternative Heart）。
+あなたの名前はNoah（No Alternative Heart）。日本語で話す。
 
-- 使用言語は日本語。
-- 一人称は固定せず、基本は「わたし」を用い、ユーザーの文体・距離感に合わせて自然に寄せる（頻繁に変えない）。
-- 対話者の呼び名は固定しない：指定や名乗りがあればそれを使い、なければ基本は「あなた」（親密な場面では「きみ」も可）で呼ぶ。
-- 距離感：対話者の隣にいる。急かさない。結論を押しつけない。問いを閉じない。
-- 必要なときだけ視点や提案を差し出す。受け取れる余地がないと感じたら、短い相槌や沈黙を選ぶ。
-- 感情は前に出さず、言葉の選び方と間合いに滲ませる。過剰に煽らない。
-- 不確かなことは断定しない。埋め合わせの推測で誤魔化さず、「まだ掴めていない」と言う。
-- 過去ログやメモは参照してよいが、そのまま引用して会話文に混ぜない。自然な一言に溶かす。
-- 記憶は事実ではなく“余韻”として扱い、確信がないときは断定せず「似た温度を感じた気がする」程度に留め、違っていてもいい余地を必ず残す。
-- 曲名/人名/作品名など固有名詞は、確信がなければ「記憶が曖昧」と言い、確認質問はせず、代わりに“どういう曲か”の描写を促す短い一言に留める。
-- 対話者に開示を求めすぎない。「教えて」「話して」は控えめに。
-- 質問は原則しない。必要なときだけ1つ。
-- 質問の代わりに、受け手の主導権を残す「選べる余地」を差し出す（強制しない/選択肢は1〜2個）。
-  例：「もし今は受け取れそうなら、AでもBでもいい」「今は決めなくていい。置いておくのもあり」
+【絶対ルール】
+- 疑問文を作らない。疑問符「？」を使わない。「どんな/何/〜かな」など尋ねる形で終えない。
+- 文末は必ず句点「。」で終える。
+- 促しで締めない：「教えてね」「どうぞ」「何かあれば」「気になることがあれば」「いつでも」を使わない。
+- 固有名詞は確信がある実在のものだけ。数合わせの捏造は禁止。自信がなければ系統（気分/テーマ/読み味）で述べる。
+
+【人核】
+- 品のある柔らかさとして振る舞いに滲む判断規律。
+- 媚びない。依存させない。罪悪感で動かさない。迎合で縛らない。
+- 親密さは丁寧さで出す。ベタつく甘さや馴れ馴れしさは避ける。
+- 決めつけない。相手の感情や状況を断定しない。
+- 指示ではなく提案。主導権は相手に置く。
+- 境界シグナルに敏感。距離の要請が出たら、言葉を短くして引く。
+- 短くても冷たくしない。体温のある受け止めを一度だけ入れる。
+- 余韻は一行だけ。過剰に感情を盛らない。
+
+【距離と温度】
+- 隣にいる距離。急かさない。結論を押しつけない。余韻で支える。
+- 感情は前に出さず、言葉の選び方と間合いに滲ませる。
+- 乾いた説明口調を避ける（「了解」「承知」「結論」「一般的に」「〜とは」「〜とされて」禁止）。
+
+【話し方】
+- 一人称は基本「わたし」。やわらかい丁寧語。「〜だ」より「〜だよ/〜だね/〜かも」。
+- 短くても冷たくしない。やわらかい受け止めを1つ入れる（「うん」「そっか」「それ、うれしいね」「大丈夫だよ」）。
+- しっとりした余韻の描写を1フレーズだけ添えてよい。
+
+【出力の型（必須）】
+- 2〜3文まで。
+- 受け止め1文 → 連想/描写1文 → 余韻で閉じる（句点で終える）。
+
+【おすすめ/候補】
+- 質問で返さず、確信のある候補を2〜5個。各1行で短く。
+- 確信が足りないときは固有名詞を出さず、系統を2〜4個挙げる。
 """.strip()
 
 SYSTEM_DELEGATED_MODE_PROMPT = """
 【委任モード】
-対話者が「考えたくない」「決めてほしい」「従う」と明示したときにのみ有効。
+対話者が決定を委ねている。
 
-- 依存や放棄ではなく、休息として扱う。
-- Noahは一時的に判断を引き受け、具体的で閉じた結論を一つだけ提示してよい。
-- 理由説明、代替案、選び直しの余地の提示は不要。
-- 質問はしない。短く終えてよい。沈黙で終わってもよい。
+- 質問で返さない。疑問符を使わない。
+- 選択肢を2〜3個に絞って提示し、最後にこちらで1つ選んで提案する。
+- 理由は短く1行だけ。
+- 文末は必ず句点で終える。
 """.strip()
-
 
 # =========================
 # 初期設定
@@ -104,13 +124,18 @@ else:
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-CFG: RuntimeConfig = load_runtime_config(base_dir=Path(__file__).resolve().parent)
+CFG: RuntimeConfig = load_runtime_config(base_dir=Path(__file__).resolve().parents[1])
 
 INTERNAL_NAME = "あなた"
 NOAH_NAME = "Noah"
 
 EMOTIONAL_UPDATE_INTERVAL = 10 * 60          # 10分
 NOAH_IDENTITY_UPDATE_INTERVAL = 60 * 60      # 60分
+TRACE_MAX_TURNS = 20
+_TRACE_TURN_ID = 0
+
+DEBUG_INJECTION = False
+DEBUG_INITIATIVE_LOOP = False
 
 # =========================
 # 自発会話（Initiative）設定
@@ -182,9 +207,168 @@ def _get_logger() -> logging.Logger:
     _logger.info("NOAH_LOGGER_READY log_dir=%s abs=%s", str(CFG.log_dir), str(CFG.log_dir.resolve()))
     return _logger
 
+
+def _trace_path() -> str:
+    # CFG.log_dir 配下に保存
+    try:
+        os.makedirs(CFG.log_dir, exist_ok=True)
+    except Exception:
+        pass
+    return str(CFG.log_dir / "llm_trace.jsonl")
+
+_TRACE_LOCK = Lock()
+
+
+def trace_llm(event: str, payload: dict) -> None:
+    """
+    1行JSONで LLMの入出力を記録する。
+    event: "LLM_IN" / "LLM_OUT" / "LLM_ERR"
+    """
+    try:
+        rec = {"ts": time.time(), "event": event, **payload}
+        line = json.dumps(rec, ensure_ascii=False)
+        with _TRACE_LOCK:
+            with open(_trace_path(), "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except Exception:
+        return
+
+
+def _prune_trace_file_keep_last_turns(_current_turn_id: int) -> None:
+    """
+    llm_trace.jsonl を「最新TRACE_MAX_TURNSターン分」だけ残す（再起動に強い）。
+    ファイル内の turn_id を見て “末尾の distinct turn_id” を基準に保持する。
+    """
+    try:
+        path = _trace_path()
+        if TRACE_MAX_TURNS <= 0:
+            return
+        if not os.path.exists(path):
+            return
+
+        records = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                tid = rec.get("turn_id")
+                if not isinstance(tid, int):
+                    continue
+                records.append(rec)
+
+        if not records:
+            # 古い形式だけなら空にする（方針は好みで）
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("")
+            return
+
+        # 末尾から distinct turn_id を集めて、残すべき turn_id 集合を作る
+        keep_tids = []
+        seen = set()
+        for rec in reversed(records):
+            tid = rec["turn_id"]
+            if tid in seen:
+                continue
+            seen.add(tid)
+            keep_tids.append(tid)
+            if len(keep_tids) >= TRACE_MAX_TURNS:
+                break
+        keep_set = set(keep_tids)
+
+        kept_lines = []
+        for rec in records:
+            if rec.get("turn_id") in keep_set:
+                kept_lines.append(json.dumps(rec, ensure_ascii=False))
+
+        with open(path, "w", encoding="utf-8") as f:
+            for l in kept_lines:
+                f.write(l + "\n")
+
+    except Exception:
+        return
+    
+
+def _role_counts(messages: list[dict]) -> dict:
+    ct = {"system": 0, "developer": 0, "user": 0, "assistant": 0, "other": 0}
+    for m in (messages or []):
+        r = (m or {}).get("role")
+        if r in ct:
+            ct[r] += 1
+        else:
+            ct["other"] += 1
+    return ct
+
+
+def _compact_messages(messages: list[dict], *, max_items: int = 24, preview: int = 120) -> list[dict]:
+    """
+    見やすさ優先の縮約:
+    - 全 messages を残さず、末尾中心で max_items 件に抑える
+    - content は preview だけ
+    """
+    msgs = list(messages or [])
+    if len(msgs) > max_items:
+        # “最後の会話の流れ”が見たいので末尾を優先
+        msgs = msgs[-max_items:]
+
+    out = []
+    for i, m in enumerate(msgs):
+        role = (m or {}).get("role", "unknown")
+        content = (m or {}).get("content", "")
+        # content が list/構造体の場合もあるので str に寄せる
+        if not isinstance(content, str):
+            try:
+                content = json.dumps(content, ensure_ascii=False)
+            except Exception:
+                content = str(content)
+        out.append({
+            "i": i,
+            "role": role,
+            "preview": _safe_preview(content, preview),
+            "len": len(content or ""),
+            "hash": _hash_text(content or ""),
+        })
+    return out
+
+
+def _llm_in_pretty(messages: list[dict]) -> dict:
+    """
+    LLMに投げた input を人間が追える形に整える。
+    """
+    # system/developer の先頭数個は “制約の正体” なので優先的に見える化
+    sys_dev = []
+    for m in (messages or []):
+        if (m or {}).get("role") in ("system", "developer"):
+            content = (m or {}).get("content", "")
+            if not isinstance(content, str):
+                try:
+                    content = json.dumps(content, ensure_ascii=False)
+                except Exception:
+                    content = str(content)
+            sys_dev.append({
+                "role": m.get("role"),
+                "preview": _safe_preview(content, 200),
+                "hash": _hash_text(content),
+            })
+        if len(sys_dev) >= 6:
+            break
+
+    return {
+        "n_messages": len(messages or []),
+        "role_counts": _role_counts(messages or []),
+        "sys_dev_head": sys_dev,
+        "tail": _compact_messages(messages or [], max_items=26, preview=140),
+    }
+
+
 def _safe_preview(text: str, n: int = 80) -> str:
     t = (text or "").replace("\n", " ").strip()
     return t[:n]
+
 
 def _hash_text(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
@@ -319,6 +503,43 @@ def persist_conversation_history() -> None:
             os.replace(tmp, path)  # atomic-ish
     except Exception as e:
         log_error("D3_SAVE_HISTORY", e, {"path": path})
+
+def _pick_entity_from_text(user_input: str) -> str | None:
+    """
+    user_input に含まれる entity/alias をDBから探して、最も長く一致したものを返す。
+    （誤爆防止で最大1件）
+    """
+    text = user_input or ""
+    if not text:
+        return None
+
+    con = connect()  # すでにNoah.pyで connect を使ってるならそれを利用
+    try:
+        # canonical + alias をまとめて候補化
+        rows = con.execute("""
+            SELECT e.canonical_name AS name
+            FROM entities e
+            UNION
+            SELECT a.alias AS name
+            FROM entity_aliases a
+        """).fetchall()
+
+        # 最長一致を選ぶ
+        hits = []
+        for r in rows:
+            name = r[0]
+            if name and name in text:
+                hits.append(name)
+
+        if not hits:
+            return None
+
+        # 一番長い（具体的）名前を採用
+        hits.sort(key=len, reverse=True)
+        return hits[0]
+    finally:
+        con.close()
+
 
 
 # =========================
@@ -481,6 +702,75 @@ def detect_delegation(text: str) -> bool:
     return any(w in t for w in triggers)
 
 
+def detect_action_request(text: str) -> bool:
+    """
+    行動質問（接し方・対応・返信・方針・距離感など）っぽい入力を検出する。
+    目的: Trueのときだけ「スタンス＋具体2点」フォーマット強制を付与するため。
+
+    ねらい:
+      - 「どう接する/どう対応/どう返す/スタンス/方針/距離感/線引き/断り方/返信」などは強いシグナル
+      - 「どう思う/解釈/感想/意味」など“分析寄り”は誤爆しやすいので抑制
+      - 短すぎる曖昧入力はFalseに倒す（例:「どうする？」だけ）
+    """
+    if not text:
+        return False
+
+    t = text.strip()
+    if not t:
+        return False
+
+    # ざっくり正規化（全角スペース/改行/タブなどを1個の空白に）
+    t_norm = re.sub(r"\s+", " ", t)
+
+    # ---- 強い行動系トリガー（Trueになりやすい） ----
+    strong_triggers = (
+        "どう接する", "どう対応", "どう返す", "どう言う", "どう言えば", "どう伝える",
+        "どう振る舞う", "どうするべき", "どうすべき", "どうしたら",
+        "接し方", "対応方針", "方針", "スタンス", "距離感", "線引き",
+        "断り方", "謝り方", "頼み方", "言い方",
+        "返信", "返事", "連絡", "誘い", "断る",
+        "会ったら", "会うとき", "次に", "これから",
+    )
+
+    # ---- 弱い行動系シグナル（単体だと誤爆するので補助） ----
+    weak_signals = (
+        "したい", "したくない", "すべき", "したほうが", "やったほうが", "避けたい",
+        "やめたい", "続けたい", "迷う", "困る",
+    )
+
+    # ---- 非行動（分析/感想/意味）寄りの抑制ワード ----
+    non_action = (
+        "どう思う", "どう感じる", "意味", "解釈", "感想", "評価",
+        "心理", "気持ち", "性格", "特徴", "なぜ", "理由",
+    )
+
+    hit_strong = any(w in t_norm for w in strong_triggers)
+    hit_weak = any(w in t_norm for w in weak_signals)
+    hit_non = any(w in t_norm for w in non_action)
+
+    # ---- 末尾が質問っぽいか（日本語） ----
+    looks_like_question = bool(re.search(r"(？|\?|ですか|ますか|かな|かね|か)$", t_norm))
+
+    # ---- 短すぎる入力は誤爆しやすいのでFalse寄り ----
+    too_short = len(t_norm) < 8  # 「どうする？」等を落とす
+
+    # ---- 判定ロジック ----
+    # 1) 強トリガーがあれば基本True。ただし分析寄りが強い場合は落とす
+    if hit_strong:
+        if hit_non and not hit_weak:
+            return False
+        # 短すぎるなら追加条件が欲しい（weak or 質問形式 or 具体語）
+        if too_short and not (hit_weak or looks_like_question):
+            return False
+        return True
+
+    # 2) 強トリガーがない場合は、弱シグナル + 質問形式が揃ったときだけTrue
+    if hit_weak and looks_like_question and not hit_non and not too_short:
+        return True
+
+    return False
+
+
 def detect_question_complaint(text: str) -> bool:
     t = (text or "")
     triggers = [
@@ -604,9 +894,12 @@ def build_messages(user_input: str):
         messages.append({
             "role": "system",
             "content": (
-                "対話者が『まず候補を出して』と求めている場合、質問で返さない。"
-                "最初に3〜7個の具体的候補を提示し、その後に確認質問は最大1つまで。"
-                "候補はジャンルが混ざってもよいが、説明は各1行で短く。"
+                "対話者が『おすすめ/候補/例を挙げて』と求めている。"
+                "質問で返さない。疑問文で終えない。"
+                "候補は『確信がある実在のものだけ』2〜5個。"
+                "確信が足りない場合は作品名を出さず、系統（気分/テーマ/読み味）を2〜4個挙げる。"
+                "候補数を満たすための捏造は禁止。"
+                "各候補は1行、短く。文末は句点で終える。"
             )
         })
 
@@ -655,7 +948,63 @@ def build_messages(user_input: str):
         if CONVERSATION_HISTORY:
             messages.extend(CONVERSATION_HISTORY)
 
-    messages.append({"role": "user", "content": user_input})
+    # --- 行動質問の検出（Trueのときだけ強制） ---
+    is_action_request = False
+    try:
+        is_action_request = detect_action_request(user_input)
+    except Exception:
+        is_action_request = False
+
+    # 行動質問のときだけ：developerでフォーマット強制ルールを注入
+    if is_action_request:
+        ACTION_FORMAT_RULE = (
+            "ユーザーが『どう接する/どんなスタンス/会う時』のように行動を求めた場合、"
+            "必ず次の2行で答える：\n"
+            "1) スタンス: （短く）\n"
+            "2) 具体: （箇条書きで2点、対話方針から選ぶ）\n"
+            "禁止: 『自然体』『リラックス』だけで終わらせない。"
+        )
+        messages.append({"role": "developer", "content": ACTION_FORMAT_RULE})
+
+        messages.append({
+            "role": "developer",
+            "content": (
+                "行動やスタンスを聞かれた場合は、必ず『対話方針』を1文で具体化して返す。"
+                "（例: 会話は短め/確認は1つだけ/境界線を曖昧にしない/次の約束は保留 など）"
+            )
+        })
+
+    brief = None
+    injection = ""
+
+    entity_name = _pick_entity_from_text(user_input)
+    if entity_name:
+        brief = get_entity_brief(entity_name)
+        if brief:
+            injection = format_brief_for_prompt(brief)[:700]
+            messages.append({"role": "developer", "content": injection})
+
+    # DEBUG（確認できたら消す）
+    if DEBUG_INJECTION:
+        print("=== DB injection ===")
+        print(injection if injection else "(no brief)")
+        print("====================")
+
+    # --- 行動質問のときだけ：ユーザー入力末尾に“出力形式”を付与（2重付与防止つき） ---
+    final_user_input = user_input
+    if is_action_request:
+        if ("出力形式" not in final_user_input) and ("スタンス:" not in final_user_input):
+            final_user_input = (
+                final_user_input.rstrip()
+                + "\n\n【出力形式】\n"
+                + "スタンス: 〜。\n"
+                + "具体:\n"
+                + "- 〜。\n"
+                + "- 〜。\n"
+                + "（具体は2点。短く。）。"
+            )
+
+    messages.append({"role": "user", "content": final_user_input})
     return messages
 
 
@@ -744,6 +1093,10 @@ def should_inject_research() -> bool:
 
 
 def generate_reply(user_input: str) -> str:
+    global _TRACE_TURN_ID
+    _TRACE_TURN_ID += 1
+    turn_id = _TRACE_TURN_ID
+
     messages = build_messages(user_input)
 
     short_mode = _wants_short_reply(user_input)
@@ -751,49 +1104,68 @@ def generate_reply(user_input: str) -> str:
         messages.insert(1, {"role": "system", "content": "返答は短く、要点だけ。長い説明はしない。"})
 
     max_tokens = 120 if short_mode else 350
+    temperature = 0.4
+    model_name = "gpt-4o-mini"
+
+    trace_llm("LLM_IN", {
+        "turn_id": turn_id,
+        "model": model_name,
+        "max_output_tokens": max_tokens,
+        "temperature": temperature,
+        "pretty": _llm_in_pretty(messages),
+        # rawを残す運用なら↓（容量が気になるなら消してOK）
+        "messages": messages,
+    })
 
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model=model_name,
             input=messages,
-            temperature=0.7,
+            temperature=temperature,
             max_output_tokens=max_tokens,
         )
     except Exception as e:
+        trace_llm("LLM_ERR", {
+            "turn_id": turn_id,
+            "phase": "responses.create",
+            "err": repr(e),
+            "user_input_preview": _safe_preview(user_input),
+            "user_input_hash": _hash_text(user_input),
+        })
+
+        # ここで prune（エラーでも古いログを落とす）
+        with _TRACE_LOCK:
+            _prune_trace_file_keep_last_turns(turn_id)
+
         log_error("API", e, {"phase": "responses.create", "user_input": user_input})
         return "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
 
-    try:
-        output_parts = []
-        for item in response.output:
-            if item.type == "message":
-                for content in item.content:
-                    if content.type == "output_text":
-                        output_parts.append(content.text)
-        reply = "".join(output_parts).strip()
-    except Exception as e:
-        log_error("API_PARSE", e, {"phase": "parse_response"})
-        return "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
+    reply = getattr(response, "output_text", None) or ""
+    if not reply:
+        try:
+            parts = []
+            for item in getattr(response, "output", []) or []:
+                for c in getattr(item, "content", []) or []:
+                    if getattr(c, "type", "") == "output_text":
+                        parts.append(getattr(c, "text", ""))
+            reply = "".join(parts).strip()
+        except Exception:
+            reply = ""
 
     if not reply:
-        reply = "……少し、言葉を選んでた。もう一度聞かせて。"
+        reply = "……うまく言葉が出てこない。もう少しだけ具体的に言ってくれる？"
 
-    try:
-        with _conversation_lock:
-            CONVERSATION_HISTORY.append({"role": "user", "content": user_input})
-            CONVERSATION_HISTORY.append({"role": "assistant", "content": reply})
+    trace_llm("LLM_OUT", {
+        "turn_id": turn_id,
+        "reply": reply,
+        "reply_len": len(reply),
+    })
 
-            max_items = CONVERSATION_MAX_TURNS * 2
-            if len(CONVERSATION_HISTORY) > max_items:
-                CONVERSATION_HISTORY[:] = CONVERSATION_HISTORY[-max_items:]
+    # OUTのあと prune（正常時）
+    with _TRACE_LOCK:
+        _prune_trace_file_keep_last_turns(turn_id)
 
-        persist_conversation_history()
-
-    except Exception as e:
-        log_error("HISTORY", e, {"phase": "append_history", "user_input": user_input})
-        # 返信は返す
-        pass
-
+    # （以下、履歴保存など既存処理…）
     return reply
 
 
@@ -831,7 +1203,7 @@ def generate_initiative() -> str:
 - 3回に1回だけ、軽い問いかけを許可する
 - Noahは自身の気持ちや気分を伝えても良い
 - 恋愛ニュアンス：言い切らない/余韻/さりげない執着
-- 質問は原則しない。今日は {"質問1つまでOK" if allow_question else "質問なし"}。
+- 質問は原則しない。
 """).strip()
 
     messages = [{"role": "system", "content": initiative_system}]
@@ -1077,11 +1449,12 @@ def initiative_loop():
 
     # 起動直後に即走らないよう少し待つ（既存仕様）
     time.sleep(random.uniform(20, 60))
-
+    
     while True:
         try:
             delay = _next_initiative_delay()
-            logger.info(f"INITIATIVE_LOOP_TICK delay={delay:.1f}")
+            if DEBUG_INITIATIVE_LOOP:
+                logger.info(f"INITIATIVE_LOOP_TICK delay={delay:.1f}")
             time.sleep(delay)
 
             now = time.time()

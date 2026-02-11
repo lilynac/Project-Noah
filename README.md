@@ -7,25 +7,20 @@ Mac のメニューバー常駐で使う Noah（常駐MVP）。
 ### 起動
 1. 仮想環境を有効化
    source .venv/bin/activate
-メニューバー起動
 
-python -m src.noah_menubar
-メニューバーの Start を押す
-表示が Noah · Ready になったら準備OK
+2. 起動（標準：Qt / Tray）
+   python -m src
 
-会話
-メニューバーの Talk... から送信
+- 起動するとトレイ（メニューバー）にアイコンが出ます
+- HTTP service は http://127.0.0.1:8765 で待ち受けます（ログに表示）
 
-終了
-メニューバーの Stop → Quit
+### 終了
+- トレイメニューから終了（またはアプリ終了）
 
-セットアップ（初回のみ）
-Requirements
-macOS
+### 旧メニューバー（rumps）起動（legacy / 任意）
+※ rumps を入れている場合のみ使用できます。通常の起動は `python -m src` です。
 
-Python 3.10+（推奨 3.11〜3.13）
-
-OpenAI API Key
+python -m src.legacy.noah_menubar
 
 1) 仮想環境
 python -m venv .venv

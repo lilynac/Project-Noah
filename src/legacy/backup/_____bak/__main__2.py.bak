@@ -64,7 +64,7 @@ def main():
             run_once(noah, text)
         return
 
-    # デフォルト起動は Qt に統一
+    # 従来どおり：python -m src でCLI起動
     from .qt_entry import main as qt_main
     qt_main()
 

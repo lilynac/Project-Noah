@@ -325,15 +325,10 @@ class Overlay(QLabel):
         self._drag_pos = None
 
 
-def create_overlay():
-    w = Overlay()
-    w.show()
-    return w
-
-
 def main():
     app = QApplication(sys.argv)
-    create_overlay()
+    w = Overlay()
+    w.show()
     sys.exit(app.exec())
 
 
