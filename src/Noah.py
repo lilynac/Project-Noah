@@ -59,6 +59,12 @@ from .suppression import (
     _sup_system_prompt
 )
 
+try:
+    from src.initiative.signals import load_signals, save_signals, touch_user_message, set_mode
+except Exception:
+    load_signals = save_signals = touch_user_message = set_mode = None
+
+
 # =========================
 # Noahの人格・対話スタイル
 # =========================
@@ -883,6 +889,38 @@ def build_messages(user_input: str):
         sup = _sup_update(sup, signals, cooldown_turns=3, cooldown_minutes=5)
         _sup_save(SUPPRESSION_PATH, sup)
         sup_prompt = _sup_system_prompt(sup)
+        # --- Task2 initiative signals（会話状態）更新 ---
+        try:
+            if load_signals and save_signals and touch_user_message:
+                ini = load_signals()
+
+                # mode は既存の仕組みがあるならそれを使う（例: is_work_mode()）
+                try:
+                    if set_mode:
+                        set_mode(ini, "work" if is_work_mode() else "normal")
+                except Exception:
+                    pass
+
+                # suppressionのsignalsから engaged/rejected を雑に推定
+                # （正確さより“抑制側に倒す”が大事）
+                txt = (user_input or "").strip()
+                is_short = len(txt) <= 6
+                # _sup_detect の戻りが dict でも obj でも拾えるようにする
+                sig_short = bool(getattr(signals, "short", False)) or bool(getattr(signals, "is_short", False)) or bool((signals.get("short") if isinstance(signals, dict) else False))
+                sig_silent = bool(getattr(signals, "silent", False)) or bool((signals.get("silent") if isinstance(signals, dict) else False))
+
+                rejected = bool(sig_short or sig_silent or is_short)
+                engaged = bool((not rejected) and ("?" in txt or "？" in txt or len(txt) >= 30))
+
+                touch_user_message(
+                    ini,
+                    user_input,
+                    engaged=engaged,
+                    rejected=rejected,
+                )
+                save_signals(ini)
+        except Exception:
+            pass
     except Exception:
         # suppressionが壊れても会話自体は落とさない（D4の確実性優先）
         sup_prompt = None
@@ -1459,10 +1497,10 @@ def initiative_loop(stop_event=None):
     initial_wait = random.uniform(20, 60)
     end_at = time.time() + initial_wait
     while time.time() < end_at:
-        if stop_event is not None and stop_event.is_set():
+        if stop_event is not None and stop_event.wait(0.2):
             logger.info("INITIATIVE_LOOP_STOP")
             return
-        time.sleep(0.2)
+
     
     while True:
         if stop_event is not None and stop_event.is_set():
@@ -1475,7 +1513,9 @@ def initiative_loop(stop_event=None):
             delay = _next_initiative_delay()
             if DEBUG_INITIATIVE_LOOP:
                 logger.info(f"INITIATIVE_LOOP_TICK delay={delay:.1f}")
-            time.sleep(delay)
+            if stop_event is not None and stop_event.wait(delay):
+                logger.info("INITIATIVE_LOOP_STOP")
+                return
 
             now = time.time()
             ok, reason = should_fire_initiative(now)
@@ -1489,7 +1529,9 @@ def initiative_loop(stop_event=None):
 
                 # muted中は軽く寝て再判定（CPUを回さない）
                 if reason == "muted":
-                    time.sleep(5)
+                    if stop_event is not None and stop_event.wait(5):
+                        logger.info("INITIATIVE_LOOP_STOP")
+                        return
                 continue
 
             set_initiative_state("ON", "ready")
@@ -1519,8 +1561,11 @@ def initiative_loop(stop_event=None):
             log_error("INITIATIVE_LOOP", e, {})
             with _state_lock:
                 _last_noah_initiative_at = time.time()
-            time.sleep(2.0)
+            if stop_event is not None and stop_event.wait(2.0):
+                logger.info("INITIATIVE_LOOP_STOP")
+                return
             continue
+
 
 
 def run_service_forever():
