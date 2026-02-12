@@ -1,41 +1,50 @@
-import os
-import re
-import time
-import json
-import random
-import unicodedata
-import subprocess
+# =========================
+# Standard library imports
+# =========================
 import argparse
-import logging
-import signal
-import traceback
 import hashlib
+import json
+import logging
+import os
+import random
+import re
+import signal
+import subprocess
+import time
+import traceback
+import unicodedata
 import sys as _sys
-from src.retrieve import get_entity_brief, format_brief_for_prompt
-
-_this = _sys.modules.get(__name__)
-if _this is not None:
-    # よくある別名を同一実体に揃える
-    _sys.modules.setdefault("Noah", _this)
-    if __package__:
-        _sys.modules.setdefault(f"{__package__}.Noah", _this)
-
-from logging.handlers import RotatingFileHandler
-from threading import Lock, Thread
 from datetime import datetime
-from openai import OpenAI
-from dotenv import load_dotenv
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from .db import connect
+from threading import Lock, Thread
 
+# =========================
+# Third-party imports
+# =========================
+from dotenv import load_dotenv
+from openai import OpenAI
+
+# =========================
+# Project imports (src / local)
+# =========================
+from src.retrieve import get_entity_brief, format_brief_for_prompt
+from src.initiative.generation import generate_initiative_text
+
+from .db import connect
 from .noah_config import load_runtime_config, RuntimeConfig
 from .log_setup import get_logger, ensure_pid_lock_or_exit, cleanup_pid_lock
+
 from .emotional_update import update_emotional_marks
 from .noah_identity_update import update_noah_identity
 from .preferences_update import update_preferences
 from .noah_research_update import update_noah_research
 from .noah_research_promote import promote_research_topics
 from .affection_update import update_affection_state
+from src.initiative.context import read_last_research_block, extract_research_phrase, should_inject_research
+from src.initiative.context import build_research_phrase
+
+
 from .paths import (
     MEMORY_DIR,
     CONSULTS_PATH,
@@ -50,19 +59,45 @@ from .paths import (
     RESEARCH_PROMOTED_PATH,
     SUPPRESSION_PATH,
 )
+
 from .suppression import (
     _sup_load,
     _sup_save,
     _sup_detect,
     _sup_update,
     _sup_is_suppressed,
-    _sup_system_prompt
+    _sup_system_prompt,
 )
 
+# =========================
+# Module aliasing
+# =========================
+_this = _sys.modules.get(__name__)
+if _this is not None:
+    # よくある別名を同一実体に揃える
+    _sys.modules.setdefault("Noah", _this)
+    if __package__:
+        _sys.modules.setdefault(f"{__package__}.Noah", _this)
+
+# =========================
+# Optional imports
+# =========================
 try:
-    from src.initiative.signals import load_signals, save_signals, touch_user_message, set_mode
+    from src.initiative.signals import (
+        load_signals,
+        save_signals,
+        touch_user_message,
+        touch_noah_message,
+        set_mode,
+    )
+    from src.initiative.decision import DecisionEngine
 except Exception:
-    load_signals = save_signals = touch_user_message = set_mode = None
+    load_signals = None
+    save_signals = None
+    touch_user_message = None
+    touch_noah_message = None
+    set_mode = None
+    DecisionEngine = None
 
 
 # =========================
@@ -517,6 +552,29 @@ def persist_conversation_history() -> None:
             os.replace(tmp, path)  # atomic-ish
     except Exception as e:
         log_error("D3_SAVE_HISTORY", e, {"path": path})
+
+
+def _recent_turn_texts(max_items: int = 6):
+    try:
+        with _conversation_lock:
+            hist = list(CONVERSATION_HISTORY)
+    except Exception:
+        hist = []
+
+    out = []
+    for m in reversed(hist):
+        role = (m or {}).get("role")
+        if role not in ("user", "assistant"):
+            continue
+        txt = (m or {}).get("content") or ""
+        txt = txt.strip()
+        if not txt:
+            continue
+        out.append(txt)
+        if len(out) >= max_items:
+            break
+    return list(reversed(out))
+
 
 def _pick_entity_from_text(user_input: str) -> str | None:
     """
@@ -1086,58 +1144,6 @@ def load_context() -> str:
     return "\n\n".join(context_parts).strip()
 
 
-def read_last_research_block() -> str:
-    if not os.path.exists(NOAH_RESEARCH_PATH):
-        return ""
-    with open(NOAH_RESEARCH_PATH, "r", encoding="utf-8") as f:
-        text = f.read().strip()
-    if not text:
-        return ""
-    blocks = text.split("\n\n")
-    return blocks[-1]
-
-
-def extract_research_phrase(block: str) -> str:
-    if not block:
-        return ""
-
-    lines = block.splitlines()
-    memo = next((l for l in lines if l.startswith("メモ:")), "")
-    if not memo:
-        return ""
-
-    phrase = memo.replace("メモ:", "").strip()
-    if len(phrase) > 40:
-        phrase = phrase[:40].rstrip(" 。、") + "…"
-    return phrase
-
-
-def should_inject_research() -> bool:
-    global _last_research_injected_date, _research_injected_today, _initiative_count
-
-    today = datetime.now().date()
-
-    # 日付が変わったらカウンタをリセット
-    if _last_research_injected_date != today:
-        _last_research_injected_date = today
-        _research_injected_today = 0
-
-    # 1日の上限（2回まで）
-    if _research_injected_today >= 2:
-        return False
-
-    # 5回に1回だけ注入（initiative_loop がカウントを進めた後に呼ばれる想定）
-    if _initiative_count % 5 != 0:
-        return False
-
-    # workモード中は注入しない
-    if is_work_mode():
-        return False
-
-    # ここでは「注入してよいか」だけ返す（カウントは実注入時に進める）
-    return True
-
-
 def generate_reply(user_input: str) -> str:
     global _TRACE_TURN_ID
     _TRACE_TURN_ID += 1
@@ -1215,6 +1221,12 @@ def generate_reply(user_input: str) -> str:
     return reply
 
 
+# DEPRECATED (initiative generation):
+# - initiative_loop からは呼ばないこと（src/initiative/generation.generate_initiative_text が唯一の生成経路）
+# - Noah.py に生成ルール（質問許可など）を再導入しないための封印
+# - もし LLM 生成が必要になったら src/initiative 側に移設し、同一制約（疑問文禁止など）を共有する
+
+
 def generate_initiative() -> str:
     global _initiative_count, _research_injected_today, _last_research_injected_date
 
@@ -1222,11 +1234,22 @@ def generate_initiative() -> str:
     research_phrase = ""
     used_research = False
 
-    if should_inject_research():
-        block = read_last_research_block()
+    today = datetime.now().date()
+
+    ok_inject = should_inject_research(
+        now_date=today,
+        initiative_count=_initiative_count,
+        injected_today=_research_injected_today,
+        last_injected_date=_last_research_injected_date,
+        is_work_mode=is_work_mode(),
+        daily_cap=2,
+        every_n=5,
+    )
+
+    if ok_inject:
+        block = read_last_research_block(NOAH_RESEARCH_PATH)
         research_phrase = extract_research_phrase(block)
         if research_phrase:
-            today = datetime.now().date()
             if _last_research_injected_date != today:
                 _last_research_injected_date = today
                 _research_injected_today = 0
@@ -1517,45 +1540,157 @@ def initiative_loop(stop_event=None):
                 logger.info("INITIATIVE_LOOP_STOP")
                 return
 
+            if DEBUG_INITIATIVE_LOOP:
+                logger.info("INITIATIVE_LOOP_TICK reached")
             now = time.time()
-            ok, reason = should_fire_initiative(now)
-            if not ok:
-                # ★ ここで必ずゲート理由をログに残す（D4証跡）
-                log_initiative_gate(now, reason, "(precheck)")
 
-                # 状態表示（見える化）
-                if reason in ("muted", "conversation_active", "ipc_busy", "suppressed"):
-                    set_initiative_state("OFF", reason)
+            # --- Task2: 3-layer decision engine ---
+            if DecisionEngine is None or load_signals is None:
+                # まだ導入できてない場合は旧ゲートにフォールバック
+                ok, reason = should_fire_initiative(now)
+                if not ok:
+                    log_initiative_gate(now, reason, "(precheck)")
+                    if reason in ("muted", "conversation_active", "ipc_busy", "suppressed"):
+                        set_initiative_state("OFF", reason)
+                    if reason == "muted":
+                        if stop_event is not None and stop_event.wait(5):
+                            logger.info("INITIATIVE_LOOP_STOP")
+                            return
+                    continue
+                set_initiative_state("ON", "ready")
+            else:
+                ini = load_signals()
 
-                # muted中は軽く寝て再判定（CPUを回さない）
-                if reason == "muted":
-                    if stop_event is not None and stop_event.wait(5):
+                # 既存 suppression 永続状態を読む（最優先停止条件）
+                try:
+                    sup = _sup_load(SUPPRESSION_PATH)
+                    persistent = _sup_is_suppressed(sup)
+                except Exception:
+                    persistent = False
+
+                recent_turns = _recent_turn_texts()
+
+                eng = DecisionEngine()
+                dec = eng.evaluate(
+                    ini,
+                    now_ts=now,
+                    persistent_suppressed=persistent,
+                    recent_turns=recent_turns,
+                )
+
+                # ★ログ（必須）：3レイヤの理由が追える
+                try:
+                    logger.info(
+                        "INITIATIVE_EVAL "
+                        f"opp={dec.debug.get('opportunity',{})} "
+                        f"val={dec.debug.get('value',{})} "
+                        f"sup={dec.debug.get('suppression',{})} "
+                        f"final={dec.debug.get('final_score')} "
+                        f"thr={dec.debug.get('threshold')} "
+                        f"speak={dec.speak} cooldown={dec.cooldown_sec}"
+                    )
+                except Exception:
+                    pass
+
+                if not dec.speak:
+                    set_initiative_state("OFF", "decision")
+                    # cooldown ぶん待って次へ（stop_event対応）
+                    if stop_event is not None and stop_event.wait(dec.cooldown_sec):
                         logger.info("INITIATIVE_LOOP_STOP")
                         return
-                continue
+                    continue
 
-            set_initiative_state("ON", "ready")
+                set_initiative_state("ON", "ready")
+
+                # speakするので、signals更新（Noahが喋った扱い）
+                try:
+                    if touch_noah_message and save_signals:
+                        touch_noah_message(ini, now_ts=now, is_initiative=True)
+                        save_signals(ini)
+                except Exception:
+                    pass
+
+            # --- speak path (既存の生成+重複排除+emit を維持) ---
+
+            # NOTE (Runner policy):
+            # - Noah.py は "Runner" として統合点に徹する。
+            # - initiative の判断ロジックは DecisionEngine (src) のみ。
+            # - initiative の生成ルールは generate_initiative_text (src/initiative) のみ。
+            # - このループに追加してよいのは「emit最終ゲート（ipc in-flight / 重複防止）」とログのみ。
+            # - 生成の思想（疑問文禁止、短文、撤退の早さ等）を Noah.py に再導入しないこと。
+
 
             # ここで「1回分のinitiative」を確定（カウンタを進める）
             with _state_lock:
                 _initiative_count += 1
 
-            text = generate_initiative()
+            # style は DecisionEngine の value debug から拾う（なければ micro）
+            style = "micro"
+            try:
+                style = (dec.debug.get("value") or {}).get("style") or "micro"
+            except Exception:
+                pass
 
-            # 重複なら再生成（最大1回）
+            # 既存の “余韻(research)” や state を使いたければここで渡す
+            state = load_state_snippet()
+            # research_phrase は、今は空でOK（あとで generate_initiative のロジックから移植できる）
+            today = datetime.now().date()
+            research_phrase = build_research_phrase(
+                research_path=NOAH_RESEARCH_PATH,
+                now_date=today,
+                initiative_count=_initiative_count,
+                injected_today=_research_injected_today,
+                last_injected_date=_last_research_injected_date,
+                is_work_mode=is_work_mode(),
+                daily_cap=2,
+                every_n=5,
+            )
+            
+            gen = generate_initiative_text(
+                style=style,
+                signals=ini,
+                recent_turns=recent_turns,
+                state_snippet=state,
+                research_phrase=research_phrase,
+            )
+            text = gen.text
+
             if _initiative_is_duplicate(text):
-                text2 = generate_initiative()
-                if _initiative_is_duplicate(text2):
+                base_seed = int(now) ^ (_initiative_count * 131)
+                text_alt = None
+
+                for i in range(2):
+                    gen2 = generate_initiative_text(
+                        style=style,
+                        signals=ini,
+                        recent_turns=recent_turns,
+                        state_snippet=state,
+                        research_phrase=research_phrase,
+                        seed=base_seed + i + 1,
+                    )
+                    if not _initiative_is_duplicate(gen2.text):
+                        text_alt = gen2.text
+                        break
+
+                if not text_alt:
                     set_initiative_state("OFF", "dup_skip")
                     continue
-                text = text2
 
-            # 出口は必ず1本
+                text = text_alt
+
+
+            # Runner最終ゲート（ここだけは Noah.py に残してよい）
+            # - ipc in-flight / 送信失敗なら出さない
+            # - 直近のhash重複なら出さない（上で処理済み）
+            # それ以外の「出す/出さない」や「文面のルール」は src/initiative 側へ寄せる
+
+
             if not emit_initiative(text):
                 continue
 
             with _state_lock:
                 _last_noah_initiative_at = time.time()
+
 
         except Exception as e:
             log_error("INITIATIVE_LOOP", e, {})

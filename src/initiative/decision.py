@@ -28,7 +28,7 @@ class Decision:
 @dataclass
 class DecisionConfig:
     # mode別の閾値（workは不利）
-    threshold_normal: float = 0.35
+    threshold_normal: float = 0.20
     threshold_work: float = 0.60
 
     # cooldown（最短）
@@ -90,12 +90,17 @@ class DecisionEngine:
         thr = self.cfg.threshold_work if signals.mode == "work" else self.cfg.threshold_normal
 
         reasons: list[str] = []
+
+        # ★ suppressでも必ず見えるように先に計算
+        final_score = opp_res.score * v
+
         debug: Dict[str, Any] = {
             "mode": signals.mode,
             "threshold": thr,
             "opportunity": {"score": opp_res.score, "reasons": opp_res.reasons},
             "value": {"score": v, "reasons": val_res.reasons, "style": val_res.style},
             "suppression": {"suppress": sup_res.suppress, "strength": sup_res.strength, "reasons": sup_res.reasons},
+            "final_score": final_score,  # ★ここで必ず入れる
         }
 
         # 1) Suppression 最優先
@@ -109,11 +114,8 @@ class DecisionEngine:
                 debug=debug,
             )
 
-        # 2) 判定：opportunity * value > threshold
-        final_score = opp_res.score * v
-        debug["final_score"] = final_score
 
-        if final_score > thr:
+        if final_score >= thr:
             reasons.append("passed_threshold")
             cooldown = self._cooldown_for_speak(signals, sup_strength=sup_res.strength, now=now)
             return Decision(
