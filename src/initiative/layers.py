@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -14,6 +15,18 @@ def _clamp01(x: float) -> float:
     if x > 1.0:
         return 1.0
     return x
+
+
+def _exp_decay(seconds: float, half_life_sec: float) -> float:
+    """
+    1.0 -> 0.5 (half-life) -> 0.25 ...
+    half_life_sec が小さいほど早く薄れる
+    """
+    if half_life_sec <= 0:
+        return 0.0
+    if seconds <= 0:
+        return 1.0
+    return 0.5 ** (seconds / float(half_life_sec))
 
 
 @dataclass
@@ -134,6 +147,12 @@ class SuppressionConfig:
     consecutive_base: float = 0.35  # 1回目以降のベース加点
     consecutive_growth: float = 1.6 # 指数係数（>1で増える）
 
+    # weak reject の半減期
+    reject_weak_half_life_sec: int = 12 * 60
+
+    # strong reject の半減期
+    reject_strong_half_life_sec: int = 120 * 60
+
 
 class SuppressionLayer:
     """
@@ -185,14 +204,10 @@ class SuppressionLayer:
                 strength = max(strength, 0.95)
                 reasons.append(f"recent_reject_strong:{int(dt)}s")
             elif dt <= self.cfg.reject_weak_window_sec:
-                # 弱い抑制（時間とともに減衰）
-                # dt=strong_window -> 0.85, dt=weak_window -> 0.35 くらいに線形で落とす
-                span = self.cfg.reject_weak_window_sec - self.cfg.reject_strong_window_sec
-                if span <= 0:
-                    decay = 0.6
-                else:
-                    t = (dt - self.cfg.reject_strong_window_sec) / float(span)
-                    decay = 0.85 + (0.35 - 0.85) * t
+                # 弱い抑制（指数減衰で自然に薄れる）
+                # dt=0 のとき 0.85、時間で半減していく（12分で半分が目安）
+                weak = _exp_decay(dt, self.cfg.reject_weak_half_life_sec)
+                decay = 0.85 * weak
                 strength = max(strength, _clamp01(decay))
                 reasons.append(f"recent_reject_weak:{int(dt)}s")
 

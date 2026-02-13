@@ -669,7 +669,9 @@ def should_fire_initiative(now: float) -> tuple[bool, str]:
     try:
         sup = _sup_load(SUPPRESSION_PATH)
         if _sup_is_suppressed(sup):
+            _get_logger().info("SUPPRESSION_STATE ns=dialogue persistent=True path=legacy_gate")
             return False, "suppressed"
+
     except Exception:
         pass
 
@@ -1534,6 +1536,7 @@ def initiative_loop(stop_event=None):
             return
         try:
             delay = _next_initiative_delay()
+            logger.info(f"INITIATIVE_LOOP_TICK ns=initiative delay={delay:.1f}")
             if DEBUG_INITIATIVE_LOOP:
                 logger.info(f"INITIATIVE_LOOP_TICK delay={delay:.1f}")
             if stop_event is not None and stop_event.wait(delay):
@@ -1565,8 +1568,11 @@ def initiative_loop(stop_event=None):
                 try:
                     sup = _sup_load(SUPPRESSION_PATH)
                     persistent = _sup_is_suppressed(sup)
+                    logger.info(f"SUPPRESSION_STATE ns=dialogue persistent={persistent}")
+
                 except Exception:
                     persistent = False
+                    logger.info("SUPPRESSION_STATE ns=dialogue persistent=False err=load_failed")
 
                 recent_turns = _recent_turn_texts()
 
@@ -1581,7 +1587,7 @@ def initiative_loop(stop_event=None):
                 # ★ログ（必須）：3レイヤの理由が追える
                 try:
                     logger.info(
-                        "INITIATIVE_EVAL "
+                        "INITIATIVE_EVAL ns=initiative "
                         f"opp={dec.debug.get('opportunity',{})} "
                         f"val={dec.debug.get('value',{})} "
                         f"sup={dec.debug.get('suppression',{})} "

@@ -37,11 +37,11 @@ class DecisionConfig:
     cooldown_speak_work_sec: int = 45 * 60       # 45分（workは長め）
 
     # 抑制が強いほど待ちを伸ばす係数
-    suppression_cooldown_boost_max: int = 30 * 60  # 最大+30分
+    suppression_cooldown_boost_max: int = 6 * 60  # 最大+6分
 
     # 最近拒否があるときの追加待ち（強いペナルティ）
     rejected_recent_window_sec: int = 30 * 60
-    rejected_extra_cooldown_sec: int = 40 * 60     # +40分
+    rejected_extra_cooldown_sec: int = 6 * 60     # +6分
 
 
 class DecisionEngine:
