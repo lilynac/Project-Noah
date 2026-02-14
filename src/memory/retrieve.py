@@ -1,12 +1,14 @@
 # src/memory/retrieve.py
 import json
 import math
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.db import connect
-from src.memory.decay import reinforce
 from src.memory.store import estimate_importance_and_tags  # 既存ルールで tags 抽出に流用
+logger = logging.getLogger("noah")
+logger.info("MEMORY_RETRIEVE_MODULE_LOADED ns=memory")
 
 
 def _clamp01(x: float) -> float:
@@ -57,17 +59,21 @@ def retrieve_memories(
     top_summary: int = 4,
     top_episode: int = 3,
     min_strength: float = 0.06,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    3階層で返す：
-      narrative 少数 → summary 数件 → episode 必要最少数
-    返したものは reinforce（再固定）する。
-    """
+) -> Dict[str, Any]:
+    logger.info("MEM_RETRIEVE_ENTER ns=memory")
+
     q = (query_text or "").strip()
+
+    logger.info("MEM_RETRIEVE_BEFORE_TAGS ns=memory")
     qtags = estimate_importance_and_tags(q, source="user").tags  # tagsだけ利用
+    logger.info("MEM_RETRIEVE_AFTER_TAGS ns=memory")
+
     now = datetime.now(timezone.utc)
 
+    logger.info("MEM_RETRIEVE_BEFORE_CONNECT ns=memory")
     con = connect()
+    logger.info("MEM_RETRIEVE_AFTER_CONNECT ns=memory")
+
     try:
         # narrative
         nrows = con.execute(
@@ -106,17 +112,14 @@ def retrieve_memories(
         ).fetchall()
 
         def rank(rows, kind: str) -> List[Dict[str, Any]]:
-            scored = []
+            scored: List[Dict[str, Any]] = []
             for r in rows:
                 d = dict(r)
                 tags = _parse_tags(d.get("tags_json"))
-                sim = _jaccard(qtags, tags) if qtags else (1.0 if q in (d.get("text") or "") else 0.0)
+                sim = _jaccard(qtags, tags) if qtags else (1.0 if q and q in (d.get("text") or "") else 0.0)
 
                 last = _safe_dt(d.get("last_access_at") or "") or _safe_dt(d.get("created_at") or "")
-                if last:
-                    rec = _recency_score((now - last).total_seconds(), tau_days=7.0)
-                else:
-                    rec = 0.0
+                rec = _recency_score((now - last).total_seconds(), tau_days=7.0) if last else 0.0
 
                 st = float(d.get("strength") or 0.0)
                 sc = _score(sim, st, rec)
@@ -139,15 +142,17 @@ def retrieve_memories(
         ranked_s = rank(srows, "summary")[: int(top_summary)]
         ranked_e = rank(erows, "episode")[: int(top_episode)]
 
-        # reinforce（返した分だけ）
-        for it in ranked_n:
-            reinforce("narrative", it["id"], 0.03)
-        for it in ranked_s:
-            reinforce("summary", it["id"], 0.05)
-        for it in ranked_e:
-            reinforce("episode", it["id"], 0.08)
-
-        return {"narrative": ranked_n, "summary": ranked_s, "episode": ranked_e, "query_tags": qtags}
+        return {
+            "narrative": ranked_n,
+            "summary": ranked_s,
+            "episode": ranked_e,
+            "query_tags": qtags,
+            "reinforce_ids": {
+                "narrative": [it["id"] for it in ranked_n],
+                "summary": [it["id"] for it in ranked_s],
+                "episode": [it["id"] for it in ranked_e],
+            },
+        }
 
     finally:
         con.close()

@@ -45,7 +45,7 @@ from src.initiative.context import read_last_research_block, extract_research_ph
 from src.initiative.context import build_research_phrase
 from src.memory.decay import apply_decay
 from src.memory.retrieve import retrieve_memories, format_memory_block
-
+from src.memory.decay import reinforce
 
 from .paths import (
     MEMORY_DIR,
@@ -60,7 +60,10 @@ from .paths import (
     RESEARCH_USAGE_LOG_PATH,
     RESEARCH_PROMOTED_PATH,
     SUPPRESSION_PATH,
+    RUNTIME_STATE_PATH,
 )
+
+from src.dialogue.templating import blend_reply
 
 from .suppression import (
     _sup_load,
@@ -923,7 +926,6 @@ def save_log(user_text: str, noah_text: str):
         with open(CONSULTS_PATH, "a", encoding="utf-8") as f:
             f.write(log)
 
-        # ---- Task3: store episode memories (fast, rule-based) ----
         try:
             store_episode(user_text, source="user")
             store_episode(noah_text, source="noah")
@@ -960,7 +962,7 @@ def build_messages(user_input: str):
         sup = _sup_update(sup, signals, cooldown_turns=3, cooldown_minutes=5)
         _sup_save(SUPPRESSION_PATH, sup)
         sup_prompt = _sup_system_prompt(sup)
-        # --- Task2 initiative signals（会話状態）更新 ---
+
         try:
             if load_signals and save_signals and touch_user_message:
                 ini = load_signals()
@@ -1165,7 +1167,6 @@ def generate_reply(user_input: str) -> str:
     messages = build_messages(user_input)
 
 
-    # ---- Task3: memory retrieve (3-level) ----
     mem = {}
     mem_block = ""
     try:
@@ -1233,6 +1234,22 @@ def generate_reply(user_input: str) -> str:
         with _TRACE_LOCK:
             _prune_trace_file_keep_last_turns(turn_id)
 
+        # ---- reinforce（副作用フェーズ）----
+        try:
+            ids = mem.get("reinforce_ids", {})
+
+            for mid in ids.get("narrative", []):
+                reinforce("narrative", mid, 0.03)
+
+            for mid in ids.get("summary", []):
+                reinforce("summary", mid, 0.05)
+
+            for mid in ids.get("episode", []):
+                reinforce("episode", mid, 0.08)
+
+        except Exception as e:
+            log_error("MEMORY_REINFORCE", e, {})
+
         log_error("API", e, {"phase": "responses.create", "user_input": user_input})
         return "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
 
@@ -1260,6 +1277,20 @@ def generate_reply(user_input: str) -> str:
     # OUTのあと prune（正常時）
     with _TRACE_LOCK:
         _prune_trace_file_keep_last_turns(turn_id)
+
+    # ---- A: template blending（体感品質の揺らぎを増やす） ----
+    try:
+        blended, scene, template_id = blend_reply(
+            user_input=user_input,
+            llm_reply=reply,
+            runtime_state_path=RUNTIME_STATE_PATH,
+            short_mode=short_mode,
+        )
+        _get_logger().info("TEMPLATE scene=%s template_id=%s", scene, template_id)
+        reply = blended
+    except Exception as e:
+        # 失敗しても元の返答は返す
+        log_error("TEMPLATE_BLEND", e, {"user_input": user_input})
 
     # （以下、履歴保存など既存処理…）
     return reply
@@ -1590,17 +1621,32 @@ def initiative_loop(stop_event=None):
         try:
             delay = _next_initiative_delay()
             logger.info(f"INITIATIVE_LOOP_TICK ns=initiative delay={delay:.1f}")
+            logger.info("INITIATIVE_TICK_FLOW ns=initiative reached_after_tick_log")
+
             if DEBUG_INITIATIVE_LOOP:
                 logger.info(f"INITIATIVE_LOOP_TICK delay={delay:.1f}")
+
             if stop_event is not None and stop_event.wait(delay):
                 logger.info("INITIATIVE_LOOP_STOP")
                 return
 
             if DEBUG_INITIATIVE_LOOP:
                 logger.info("INITIATIVE_LOOP_TICK reached")
+
             now = time.time()
 
-            # --- Task2: 3-layer decision engine ---
+
+            logger.info("INITIATIVE_MEMORY_POINT ns=initiative before_retrieve")
+
+            logger.info("INITIATIVE_RETRIEVE_IMPORT_BEGIN ns=initiative")
+            from src.memory.retrieve import retrieve_memories
+            logger.info("INITIATIVE_RETRIEVE_IMPORT_DONE ns=initiative")
+
+            logger.info("INITIATIVE_RETRIEVE_CALL_BEGIN ns=initiative")
+            mem = retrieve_memories(q, top_narrative=2, top_summary=3, top_episode=0)
+            logger.info("INITIATIVE_RETRIEVE_CALL_DONE ns=initiative")
+
+
             if DecisionEngine is None or load_signals is None:
                 # まだ導入できてない場合は旧ゲートにフォールバック
                 ok, reason = should_fire_initiative(now)
@@ -1629,7 +1675,6 @@ def initiative_loop(stop_event=None):
 
                 recent_turns = _recent_turn_texts()
 
-                # ---- Task3: memory -> Value (initiative) ----
                 memory_ctx = None
                 try:
                     from src.memory.retrieve import retrieve_memories

@@ -84,7 +84,7 @@ class DecisionEngine:
         sup_res = self.sup.evaluate(signals, now_ts=now, persistent_suppressed=persistent_suppressed)
 
         # Valueは暫定
-        val_res = self.val.evaluate(signals, recent_turns=recent_turns, now_ts=now,memory_ctx=memory_ctx)
+        val_res = self.val.evaluate(signals, recent_turns=recent_turns, now_ts=now, memory_ctx=memory_ctx )
         v = _clamp01(val_res.score)
 
         # mode別 threshold

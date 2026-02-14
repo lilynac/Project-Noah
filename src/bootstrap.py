@@ -104,6 +104,9 @@ def bootstrap_once(verbose: bool = False) -> None:
 
     bootstrap_files()
 
+    from .db import init_db
+    init_db()
+
     if verbose:
         created = []
         for f in [

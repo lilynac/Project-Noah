@@ -18,6 +18,9 @@ NOAH_IDENTITY_PATH = str(MEMORY_DIR / "noah_identity.txt")
 NOAH_STATE_PATH = str(MEMORY_DIR / "noah_state.txt")
 MODE_PATH = str(MEMORY_DIR / "mode.txt")
 
+# A: 返答テンプレの直近使用状況（軽量な実行時状態）
+RUNTIME_STATE_PATH = str(MEMORY_DIR / "runtime_state.json")
+
 # notes（人間が手で書くメモ）
 IDEAS_PATH = str(NOTES_DIR / "ideas.txt")
 TODO_PATH = str(NOTES_DIR / "todo.txt")

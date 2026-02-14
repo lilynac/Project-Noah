@@ -281,6 +281,7 @@ class ValueLayer:
         signals: InitiativeSignals,
         recent_turns: Optional[List[str]] = None,
         now_ts: Optional[float] = None,
+        memory_ctx=None,
     ) -> ValueResult:
         now = time.time() if now_ts is None else now_ts
         reasons: List[str] = []
@@ -294,19 +295,19 @@ class ValueLayer:
         score = float(self.cfg.base_score)
         style = "micro"
 
-        # 1) 継続話題（topic tags）
+
         if signals.recent_topic_tags:
             score += self.cfg.topic_bonus
             reasons.append(f"topic_continuity:+{self.cfg.topic_bonus}")
             style = "followup"
 
-        # 2) 困り/疲れ/詰まりの簡易検知（最近の発話から）
+
         if self._looks_like_need_help(text):
             score += self.cfg.care_bonus
             reasons.append(f"care_signal:+{self.cfg.care_bonus}")
             style = "care"
 
-        # 3) engaged が最近なら少し加点
+
         if signals.last_engaged_at and signals.last_engaged_at > 0:
             dt = now - signals.last_engaged_at
             if dt < 0:
@@ -315,7 +316,7 @@ class ValueLayer:
                 score += 0.10
                 reasons.append(f"recent_engaged:{int(dt)}s:+0.10")
 
-        # 4) rejected が最近なら価値を下げる（歓迎されない可能性）
+
         if signals.last_rejected_at and signals.last_rejected_at > 0:
             dt = now - signals.last_rejected_at
             if dt < 0:
@@ -324,6 +325,16 @@ class ValueLayer:
                 score *= 0.35
                 reasons.append(f"recent_rejected:{int(dt)}s:*0.35")
                 style = "micro"
+
+
+        if memory_ctx:
+            ns = memory_ctx.get("narrative") or []
+            ss = memory_ctx.get("summary") or []
+            if ns or ss:
+                score += 0.08
+                reasons.append("memory_ctx:+0.08")
+                if style == "micro":
+                    style = "followup"
 
         score = _clamp01(score)
         score = min(score, self.cfg.max_score)

@@ -7,19 +7,34 @@ SCHEMA_PATH = Path("db/schema.sql")
 
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(DB_PATH)
+
+    con = sqlite3.connect(
+        DB_PATH,
+        timeout=5.0,
+        check_same_thread=False,
+        isolation_level=None,
+    )
     con.row_factory = sqlite3.Row
+
+    # これは毎回でもOK（軽い）
     con.execute("PRAGMA foreign_keys = ON;")
+    con.execute("PRAGMA synchronous = NORMAL;")
+
     return con
 
 def init_db():
     con = connect()
     try:
+        # ここでだけ WAL を設定する（毎回やらない）
+        con.execute("PRAGMA journal_mode = WAL;")
+
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
         con.executescript(schema)
+
+        # autocommitでも schema適用直後は明示してOK
         con.commit()
 
-        # ---- Task3: daily decay (run at most once per day) ----
+        
         today = datetime.utcnow().strftime("%Y-%m-%d")
         row = con.execute("SELECT value FROM memory_meta WHERE key='last_decay_date'").fetchone()
         last = row["value"] if row else None
