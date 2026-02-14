@@ -69,6 +69,7 @@ class DecisionEngine:
         *,
         persistent_suppressed: bool = False,
         recent_turns: Optional[list[str]] = None,
+        memory_ctx=None,
     ) -> Decision:
 
         now = time.time() if now_ts is None else now_ts
@@ -83,7 +84,7 @@ class DecisionEngine:
         sup_res = self.sup.evaluate(signals, now_ts=now, persistent_suppressed=persistent_suppressed)
 
         # Valueは暫定
-        val_res = self.val.evaluate(signals, recent_turns=recent_turns, now_ts=now)
+        val_res = self.val.evaluate(signals, recent_turns=recent_turns, now_ts=now,memory_ctx=memory_ctx)
         v = _clamp01(val_res.score)
 
         # mode別 threshold

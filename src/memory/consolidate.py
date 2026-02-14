@@ -110,8 +110,10 @@ def run_consolidation(
         stats["cluster_sizes"] = {k: len(v) for k, v in clusters.items()}
 
         for tag, eps in cluster_items:
+            if tag == "misc":
+                continue
             # 少なすぎるクラスタはまとめない（ノイズ防止）
-            min_n = 3 if tag == "misc" else 2
+            min_n = 2
             if len(eps) < min_n:
                 continue
 
@@ -184,6 +186,9 @@ def run_consolidation(
                 stats["episodes_absorbed"] += 1
 
         con.commit()
+        from src.memory.narrative import update_narratives_from_summaries
+        n = update_narratives_from_summaries(window_days=30, min_summaries_per_tag=2)
+        stats["narrative"] = n
 
         # 自然消滅：古くて弱いものを削除
         # ※ summaryに吸収されていようがいまいが、十分古くて弱いなら消す

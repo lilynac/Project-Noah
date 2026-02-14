@@ -44,6 +44,8 @@ from .affection_update import update_affection_state
 from src.initiative.context import read_last_research_block, extract_research_phrase, should_inject_research
 from src.initiative.context import build_research_phrase
 from src.memory.decay import apply_decay
+from src.memory.retrieve import retrieve_memories, format_memory_block
+
 
 from .paths import (
     MEMORY_DIR,
@@ -1162,9 +1164,40 @@ def generate_reply(user_input: str) -> str:
 
     messages = build_messages(user_input)
 
+
+    # ---- Task3: memory retrieve (3-level) ----
+    mem = {}
+    mem_block = ""
+    try:
+        mem = retrieve_memories(user_input, top_narrative=2, top_summary=4, top_episode=3)
+        mem_block = format_memory_block(mem)
+    except Exception as e:
+        log_error("MEMORY_RETRIEVE", e, {})
+
+    if mem_block:
+        mem_block = mem_block[:1200]
+
+    if mem_block:
+        # build_messages() が system を先頭に置いている想定。
+        # system が無い場合でも安全に動くように fallback する
+        inserted = False
+        for m in messages:
+            if m.get("role") == "system":
+                m["content"] += "\n\n[MEMORY]\n" + mem_block
+                inserted = True
+                break
+        if not inserted:
+            messages.insert(0, {"role": "system", "content": "[MEMORY]\n" + mem_block})
+
+
     short_mode = _wants_short_reply(user_input)
     if short_mode:
-        messages.insert(1, {"role": "system", "content": "返答は短く、要点だけ。長い説明はしない。"})
+        for m in messages:
+            if m.get("role") == "system":
+                m["content"] += "\n\n返答は短く、要点だけ。長い説明はしない。"
+                break
+        else:
+            messages.insert(0, {"role": "system", "content": "返答は短く、要点だけ。長い説明はしない。"})
 
     max_tokens = 120 if short_mode else 350
     temperature = 0.4
@@ -1596,12 +1629,26 @@ def initiative_loop(stop_event=None):
 
                 recent_turns = _recent_turn_texts()
 
+                # ---- Task3: memory -> Value (initiative) ----
+                memory_ctx = None
+                try:
+                    from src.memory.retrieve import retrieve_memories
+                    q = " ".join([t for t in (recent_turns or []) if t][-3:]).strip() or "recent"
+                    mem = retrieve_memories(q, top_narrative=2, top_summary=3, top_episode=0)
+                    memory_ctx = {"narrative": mem.get("narrative") or [], "summary": mem.get("summary") or []}
+                    logger.info("INITIATIVE_MEMORY_CTX ns=initiative n=%d s=%d",
+                        len((memory_ctx or {}).get("narrative") or []),
+                        len((memory_ctx or {}).get("summary") or []))
+                except Exception as e:
+                    log_error("INITIATIVE_MEMORY_RETRIEVE", e, {})
+
                 eng = DecisionEngine()
                 dec = eng.evaluate(
                     ini,
                     now_ts=now,
                     persistent_suppressed=persistent,
                     recent_turns=recent_turns,
+                    memory_ctx=memory_ctx, 
                 )
 
                 # ★ログ（必須）：3レイヤの理由が追える
