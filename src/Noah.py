@@ -43,7 +43,7 @@ from .noah_research_promote import promote_research_topics
 from .affection_update import update_affection_state
 from src.initiative.context import read_last_research_block, extract_research_phrase, should_inject_research
 from src.initiative.context import build_research_phrase
-
+from src.memory.decay import apply_decay
 
 from .paths import (
     MEMORY_DIR,
@@ -908,6 +908,7 @@ def ui_emit(event_type: str, payload: str = "", emotion: str = "idle"):
 
 
 def save_log(user_text: str, noah_text: str):
+    from src.memory.store import store_episode
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         SESSION_TAG = "v2"
@@ -919,6 +920,14 @@ def save_log(user_text: str, noah_text: str):
         os.makedirs(MEMORY_DIR, exist_ok=True)
         with open(CONSULTS_PATH, "a", encoding="utf-8") as f:
             f.write(log)
+
+        # ---- Task3: store episode memories (fast, rule-based) ----
+        try:
+            store_episode(user_text, source="user")
+            store_episode(noah_text, source="noah")
+        except Exception as e:
+            log_error("STORE_EPISODE", e, {})
+
     except Exception as e:
         log_error("SAVE_LOG", e, {"path": CONSULTS_PATH})
         return
@@ -1403,6 +1412,17 @@ def startup_sequence():
     global _startup_research_used, _research_injected_today, _last_research_injected_date
 
     load_conversation_history()
+
+
+    # ---- Task3: memory decay (lightweight at startup) ----
+    try:
+        u1 = apply_decay("episode", limit=500)
+        u2 = apply_decay("summary", limit=200)
+        u3 = apply_decay("narrative", limit=100)
+        logger.info("MEMORY_DECAY startup episode=%s summary=%s narrative=%s", u1, u2, u3)
+    except Exception as e:
+        log_error("MEMORY_DECAY", e, {})
+        
     greeting_holder = {"text": ""}
 
     def _gen():

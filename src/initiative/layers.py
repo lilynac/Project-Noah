@@ -137,7 +137,7 @@ class SuppressionResult:
 @dataclass
 class SuppressionConfig:
     # rejected 直後の抑制（強）
-    reject_strong_window_sec: int = 30 * 60   # 30分
+    reject_strong_window_sec: int = 10 * 60   # 10分
     reject_weak_window_sec: int = 2 * 60 * 60 # 2時間
 
     # workモードの抑制ベース

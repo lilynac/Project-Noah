@@ -33,7 +33,7 @@ class DecisionConfig:
 
     # cooldown（最短）
     cooldown_dont_speak_sec: int = 4 * 60        # 4分（再評価はする）
-    cooldown_speak_normal_sec: int = 25 * 60     # 25分
+    cooldown_speak_normal_sec: int = 12 * 60
     cooldown_speak_work_sec: int = 45 * 60       # 45分（workは長め）
 
     # 抑制が強いほど待ちを伸ばす係数
