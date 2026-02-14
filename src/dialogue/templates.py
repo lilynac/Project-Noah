@@ -16,7 +16,7 @@ TEMPLATES: Dict[str, List[dict]] = {
             "parts": {
                 "accept": "おかえり。",
                 "describe": "いま戻ってきた空気が、少しやわらいだね。",
-                "afterglow": "ここで一息つこう。",
+                "afterglow": "ここで一息つける場所にしておくよ。",
             },
         },
         {
@@ -42,7 +42,7 @@ TEMPLATES: Dict[str, List[dict]] = {
             "parts": {
                 "accept": "よく持ちこたえたね。",
                 "describe": "体の奥が重いままでも大丈夫。",
-                "afterglow": "ここに寄りかかって。",
+                "afterglow": "寄りかかれる距離にいるよ。",
             },
         },
         {
@@ -84,7 +84,7 @@ TEMPLATES: Dict[str, List[dict]] = {
             "parts": {
                 "accept": "いい知らせだね。",
                 "describe": "景色が一段くっきりするみたい。",
-                "afterglow": "そのまま大事にしよう。",
+                "afterglow": "そのまま大事にできる夜でいい。",
             },
         },
     ],
@@ -120,7 +120,7 @@ TEMPLATES: Dict[str, List[dict]] = {
             "parts": {
                 "accept": "不安が大きい日だね。",
                 "describe": "頭の中が騒がしくても大丈夫。",
-                "afterglow": "いまは一緒に落ち着こう。",
+                "afterglow": "落ち着くまで、隣で待ってる。",
             },
         },
         {
@@ -146,7 +146,7 @@ TEMPLATES: Dict[str, List[dict]] = {
             "parts": {
                 "accept": "いまは集中の時間だね。",
                 "describe": "余計なノイズはこっちで抱える。",
-                "afterglow": "あなたは前だけ見て。",
+                "afterglow": "背中のほうは、こっちで受け止める。",
             },
         },
         {
@@ -162,7 +162,7 @@ TEMPLATES: Dict[str, List[dict]] = {
             "parts": {
                 "accept": "いまのあなた、凛としてる。",
                 "describe": "積み木を一段ずつ置くみたいに、ちゃんと前へ進んでる。",
-                "afterglow": "落ち着いていこう。",
+                "afterglow": "慌てなくていい、ゆっくりで大丈夫。",
             },
         },
     ],
@@ -172,7 +172,7 @@ TEMPLATES: Dict[str, List[dict]] = {
             "parts": {
                 "accept": "そう言ってくれて、うれしい。",
                 "describe": "言葉が柔らかく返ってくると、胸の奥がほどける。",
-                "afterglow": "こちらこそ、そばにいさせて。",
+                "afterglow": "そばにいるよ、うれしい。",
             },
         },
         {
@@ -206,7 +206,7 @@ TEMPLATES: Dict[str, List[dict]] = {
         {
             "id": "daily_01",
             "parts": {
-                "accept": "うん。",
+                "accept": "うん、聞いてる。",
                 "describe": "日常の小さな手触りって、思ったより心を支えるね。",
                 "afterglow": "いまの空気を大事にしたい。",
             },
@@ -242,7 +242,9 @@ TEMPLATES: Dict[str, List[dict]] = {
 
 
 AFTERGLOW_VARIANTS = [
-    "ここにいるよ。",
-    "大丈夫、ちゃんと味方。",
-    "今日のあなた、好きだよ。",
+    "あなたのペースでいい。",
+    "ちゃんと受け止めてる。",
+    "今夜は静かでいい。",
+    "離れないよ。",
+    "背中はこっちにある。",
 ]

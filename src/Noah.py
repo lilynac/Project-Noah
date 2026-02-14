@@ -926,6 +926,7 @@ def save_log(user_text: str, noah_text: str):
         with open(CONSULTS_PATH, "a", encoding="utf-8") as f:
             f.write(log)
 
+        # ---- Task3: store episode memories (fast, rule-based) ----
         try:
             store_episode(user_text, source="user")
             store_episode(noah_text, source="noah")
@@ -962,7 +963,7 @@ def build_messages(user_input: str):
         sup = _sup_update(sup, signals, cooldown_turns=3, cooldown_minutes=5)
         _sup_save(SUPPRESSION_PATH, sup)
         sup_prompt = _sup_system_prompt(sup)
-
+        # --- Task2 initiative signals（会話状態）更新 ---
         try:
             if load_signals and save_signals and touch_user_message:
                 ini = load_signals()
@@ -1167,6 +1168,7 @@ def generate_reply(user_input: str) -> str:
     messages = build_messages(user_input)
 
 
+    # ---- Task3: memory retrieve (3-level) ----
     mem = {}
     mem_block = ""
     try:
@@ -1251,7 +1253,7 @@ def generate_reply(user_input: str) -> str:
             log_error("MEMORY_REINFORCE", e, {})
 
         log_error("API", e, {"phase": "responses.create", "user_input": user_input})
-        return "……今ちょっと不安定みたい。もう一度だけ、同じ言葉で言って。"
+        return "……今ちょっと不安定みたい。ここで受け止める。"
 
     reply = getattr(response, "output_text", None) or ""
     if not reply:
@@ -1266,7 +1268,7 @@ def generate_reply(user_input: str) -> str:
             reply = ""
 
     if not reply:
-        reply = "……うまく言葉が出てこない。もう少しだけ具体的に言ってくれる？"
+        reply = "……うまく言葉が出てこない。言葉が増えるまで、ここで受け止める。"
 
     trace_llm("LLM_OUT", {
         "turn_id": turn_id,
@@ -1635,7 +1637,7 @@ def initiative_loop(stop_event=None):
 
             now = time.time()
 
-
+            # --- Task2: 3-layer decision engine ---
             logger.info("INITIATIVE_MEMORY_POINT ns=initiative before_retrieve")
 
             logger.info("INITIATIVE_RETRIEVE_IMPORT_BEGIN ns=initiative")
@@ -1675,6 +1677,7 @@ def initiative_loop(stop_event=None):
 
                 recent_turns = _recent_turn_texts()
 
+                # ---- Task3: memory -> Value (initiative) ----
                 memory_ctx = None
                 try:
                     from src.memory.retrieve import retrieve_memories

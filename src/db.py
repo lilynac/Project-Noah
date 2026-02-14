@@ -35,6 +35,8 @@ def init_db():
         con.commit()
 
         
+
+        # ---- Task3: daily decay (run at most once per day) ----
         today = datetime.utcnow().strftime("%Y-%m-%d")
         row = con.execute("SELECT value FROM memory_meta WHERE key='last_decay_date'").fetchone()
         last = row["value"] if row else None

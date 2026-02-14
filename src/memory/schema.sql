@@ -1,3 +1,7 @@
+-- =========================================================
+-- Task3: Human-like Memory (episode / summary / narrative)
+-- =========================================================
+
 CREATE TABLE IF NOT EXISTS summary_memories (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
 
