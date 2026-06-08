@@ -24,7 +24,6 @@ Project-Noah-main/
 ├── .env.example
 ├── db/
 │   ├── schema.sql        # SQLite 用スキーマ
-│   └── noah.db           # SQLite DB（同梱されている場合あり）
 ├── src/
 │   ├── __main__.py       # 起動入口: python -m src
 │   ├── Noah.py           # Noah 本体、人格、応答生成、常駐ループ
