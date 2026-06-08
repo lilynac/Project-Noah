@@ -1525,7 +1525,7 @@ def startup_sequence():
     if not _startup_research_used:
         # 1日の上限（initiative側と揃える） + workモード中は混ぜない
         if _research_injected_today < 2 and (not is_work_mode()):
-            block = read_last_research_block()
+            block = read_last_research_block(NOAH_RESEARCH_PATH)
             research_phrase = extract_research_phrase(block)
 
             if research_phrase:
