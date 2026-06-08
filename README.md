@@ -307,6 +307,226 @@ NOAH_NO_DIALOG=1 timeout 8s python -m src || true
 
 ---
 
+## 作業した後に GitHub へ上げる手順
+
+普段の開発では、以下の順番で作業内容を GitHub に反映します。
+
+### 1. 変更内容を確認する
+
+```bash
+git status
+```
+
+変更されたファイル、新しく追加されたファイル、まだ Git 管理されていないファイルを確認します。
+
+差分を詳しく見たい場合:
+
+```bash
+git diff
+```
+
+ステージ済みの差分を見たい場合:
+
+```bash
+git diff --staged
+```
+
+### 2. 変更をステージする
+
+すべての変更をまとめてコミット対象にする場合:
+
+```bash
+git add -A
+```
+
+特定のファイルだけを入れる場合:
+
+```bash
+git add README.md src/Noah.py
+```
+
+もう一度確認します。
+
+```bash
+git status
+```
+
+`Changes to be committed` に入っているものが、次のコミットに含まれます。
+
+### 3. コミットする
+
+```bash
+git commit -m "update Noah behavior and README"
+```
+
+コミットメッセージは、あとで見返して内容が分かる名前にします。
+
+例:
+
+```bash
+git commit -m "docs: update setup instructions"
+git commit -m "feat: add shiritori mode"
+git commit -m "fix: adjust initiative suppression"
+```
+
+### 4. GitHub に push する
+
+```bash
+git push origin main
+```
+
+これで GitHub の `main` ブランチに反映されます。
+
+---
+
+## push できない時の対処
+
+### `Password authentication is not supported` と出る
+
+GitHub は Git 操作でアカウントのパスワード認証を受け付けていません。  
+SSH 接続を使うのがおすすめです。
+
+SSH のリモート URL に切り替える場合:
+
+```bash
+git remote set-url origin git@github.com:lilynac/Project-Noah.git
+```
+
+接続確認:
+
+```bash
+ssh -T git@github.com
+```
+
+成功したら、もう一度 push します。
+
+```bash
+git push origin main
+```
+
+### `fetch first` / `non-fast-forward` と出る
+
+GitHub 側に、手元にない更新がある状態です。  
+まずリモートの変更を取り込んでから push します。
+
+```bash
+git pull --rebase origin main
+git push origin main
+```
+
+### コンフリクトが出た場合
+
+`CONFLICT` と表示されたファイルを開いて、衝突箇所を直します。
+
+コンフリクト箇所には、以下のような印が入ります。
+
+```text
+<<<<<<< HEAD
+GitHub側または現在の内容
+=======
+自分のコミット側の内容
+>>>>>>> commit-id
+```
+
+残したい内容だけに整理して、`<<<<<<<`, `=======`, `>>>>>>>` の行を削除します。
+
+修正後:
+
+```bash
+git add README.md
+git rebase --continue
+```
+
+`git rebase --continue` のあとにエディタが開いたら、コミットメッセージをそのまま保存して閉じます。
+
+vim の場合:
+
+```text
+Esc
+:wq
+Enter
+```
+
+その後、push します。
+
+```bash
+git push origin main
+```
+
+### rebase をやめて元に戻したい場合
+
+途中で分からなくなった場合は、rebase 開始前の状態に戻せます。
+
+```bash
+git rebase --abort
+```
+
+その後、もう一度状況を確認します。
+
+```bash
+git status
+```
+
+---
+
+## よく使う Git コマンドまとめ
+
+```bash
+# 状態確認
+git status
+
+# すべての変更をコミット対象へ
+git add -A
+
+# コミット
+git commit -m "message"
+
+# GitHubへ反映
+git push origin main
+
+# GitHub側の更新を取り込んでから自分のコミットを載せ直す
+git pull --rebase origin main
+
+# rebaseの続きを実行
+git rebase --continue
+
+# rebaseを中止して元に戻す
+git rebase --abort
+```
+
+---
+
+## Git に入れるもの・入れないもの
+
+基本的には、以下は Git に入れてよいものです。
+
+- `README.md`
+- `src/` 以下のコード
+- `requirements.txt`
+- `.env.example`
+- `db/schema.sql`
+
+以下は、環境や個人情報を含む可能性があるため注意してください。
+
+- `.env`
+- `logs/`
+- `data/memory/`
+- `db/noah.db`
+
+`db/noah.db` は Noah の記憶やローカル状態を含む可能性があります。  
+配布用・公開用のリポジトリでは、必要に応じて `.gitignore` に追加してください。
+
+```gitignore
+.env
+logs/
+data/memory/
+db/noah.db
+```
+
+ただし、現在のリポジトリで `db/noah.db` を意図的に管理している場合は、削除・除外する前にバックアップしてください。
+
+---
+
 ## よくあるトラブル
 
 ### 起動しても Tray が出ない
