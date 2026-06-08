@@ -18,6 +18,7 @@ from .tray import TrayController, TrayDeps
 from .service import run_http_service
 from .desktop_noah import create_overlay
 from .paths import MODE_PATH
+from .startup_display import debug, wake_header, wake_step, wake_ready, sleep_message
 
 
 
@@ -56,24 +57,28 @@ def _post_chat(message: str, timeout: float = 30.0) -> str:
 
 def main():
     app = QApplication(sys.argv)
+    wake_header()
     stop_event = Event()
-    print("[qt_entry] stop_event created")
+    debug("[qt_entry] stop_event created")
+    wake_step("薄い眠りから、呼吸を戻しています…")
 
     # ★これが重要：ウィンドウがなくてもアプリを終了させない
     app.setQuitOnLastWindowClosed(False)
 
-    print("[qt_entry] starting…")
+    debug("[qt_entry] starting…")
 
     # ---- IPC サービス起動（/chat, /health）----
     server_thread = Thread(target=run_http_service, args=("127.0.0.1", 8765, stop_event))
     server_thread.start()
-    print("[qt_entry] http service thread started")
+    debug("[qt_entry] http service thread started")
+    wake_step("声の通り道を開きました。")
 
     # ---- Noah initiative loop ----
     from . import Noah as noah
     noah_thread = Thread(target=noah.initiative_loop, args=(stop_event,))  # ← daemonにしない
     noah_thread.start()
-    print("[qt_entry] initiative loop thread started")
+    debug("[qt_entry] initiative loop thread started")
+    wake_step("内側の気配が、ゆっくり動き始めました。")
 
     # ---- Tray deps ----
     def send_user_utterance(text: str):
@@ -142,7 +147,8 @@ def main():
 
 
     def quit_app():
-        print("[Quit] quitting…")
+        debug("[Quit] quitting…")
+        sleep_message()
         try:
             tray.tray.hide()  # macで残像が残るのを防ぐ
         except Exception:
@@ -158,14 +164,15 @@ def main():
 
 
     # availabilityログ
-    print(f"[qt_entry] tray available = {QSystemTrayIcon.isSystemTrayAvailable()}")
+    debug(f"[qt_entry] tray available = {QSystemTrayIcon.isSystemTrayAvailable()}")
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         msg = (
             "System Tray が利用できない環境のため Noah を起動できません。\n"
             "Tray対応のデスクトップ環境で実行してください。"
         )
-        print("[WARN] System tray is not available. quitting.")
+        print("Noahは居場所を見つけられませんでした。System Tray が利用できません。")
+        debug("[WARN] System tray is not available. quitting.")
 
         # ヘッドレス環境（例: LinuxのCI）ではダイアログを出さずに終了する
         import os
@@ -201,7 +208,9 @@ def main():
     tray = TrayController(deps)
 
     tray.show()
-    print("[qt_entry] tray.show() called")
+    debug("[qt_entry] tray.show() called")
+    wake_step("画面の端に、小さな居場所を作りました。", 0.2)
+    wake_ready()
 
     # ★保険：Qtイベントループが落ちないよう、何もしないタイマーを回す
     keepalive = QTimer()
@@ -211,9 +220,9 @@ def main():
     code = 0
     try:
         code = app.exec()
-        print(f"[qt_entry] app.exec() returned {code}")
+        debug(f"[qt_entry] app.exec() returned {code}")
     finally:
-        print("[qt_entry] stopping threads…")
+        debug("[qt_entry] stopping threads…")
         stop_event.set()
 
         # Noahを先に止める（UIに影響しにくい）

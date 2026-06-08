@@ -123,8 +123,16 @@ def bootstrap_once(verbose: bool = False) -> None:
                 created.append(f)
 
         if created:
-            print("[bootstrap] created:")
-            for f in created:
-                print("  -", f)
+            print("Noahの部屋を整えました。")
+            try:
+                from .startup_display import debug
+                for f in created:
+                    debug(f"[bootstrap] created: {f}")
+            except Exception:
+                pass
         else:
-            print("[bootstrap] nothing to create (already initialized)")
+            try:
+                from .startup_display import wake_step
+                wake_step("記憶の置き場所を確かめました。", 0.2)
+            except Exception:
+                print("Noahの部屋は、もう整っています。")

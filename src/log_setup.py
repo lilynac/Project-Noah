@@ -42,7 +42,7 @@ def get_logger(component: str, log_dir: Path, level: str, max_bytes: int, backup
     eh.setLevel(logging.WARNING)
     logger.addHandler(eh)
 
-    if os.getenv("NOAH_LOG_CONSOLE", "1").strip().lower() in ("1", "true", "yes", "on"):
+    if os.getenv("NOAH_LOG_CONSOLE", "0").strip().lower() in ("1", "true", "yes", "on"):
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
         sh.setLevel(getattr(logging, level, logging.INFO))

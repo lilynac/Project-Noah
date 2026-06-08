@@ -63,7 +63,7 @@ from .paths import (
     RUNTIME_STATE_PATH,
 )
 
-from src.dialogue.templating import blend_reply, detect_scene, finalize_freeform_reply
+from src.dialogue.templating import blend_reply
 
 from .suppression import (
     _sup_load,
@@ -72,11 +72,7 @@ from .suppression import (
     _sup_update,
     _sup_is_suppressed,
     _sup_system_prompt,
-    topic_avoid_add,
 )
-
-from .boundary import is_boundary_request, boundary_response, is_switch_request, switch_response
-from .mode import decide_mode
 
 # =========================
 # Module aliasing
@@ -772,27 +768,11 @@ def detect_stop_signal(text: str) -> bool:
     t = normalize_input(text)
     if not t:
         return False
-    # NOTE:
-    # 「静かに」は *寄り添いの依頼*（例:「静かにそばにいて」）でも頻出するため、
-    # 単純な包含だと誤爆して会話が止まってしまう。
-    # stop扱いにするのは「静かにして/黙って/放っておいて」等の“遮断”に限る。
     stop_words = [
         "やめて", "やめよう", "黙っ", "いまはいい", "今はいい", "放っておいて",
-        "しんどい", "また今度", "後で", "今日はやめたい",
+        "しんどい", "また今度", "後で", "今日はやめたい","静かに"
     ]
-    if any(w in t for w in stop_words):
-        return True
-
-    # 条件付きの stop（誤爆防止）
-    if "静か" in t:
-        # 遮断寄りの表現がある場合のみ stop
-        if any(w in t for w in ["静かにして", "静かにし", "黙って", "黙っ", "放って"]):
-            # 「そばにいて/いてほしい」等の“寄り添い”が同居する場合は stop にしない
-            if any(w in t for w in ["そば", "隣", "いて", "寄り添", "そっと"]):
-                return False
-            return True
-
-    return False
+    return any(w in t for w in stop_words)
 
 
 def detect_delegation(text: str) -> bool:
@@ -981,16 +961,6 @@ def build_messages(user_input: str):
         sup = _sup_load(SUPPRESSION_PATH)
         signals = _sup_detect(user_input)
         sup = _sup_update(sup, signals, cooldown_turns=3, cooldown_minutes=5)
-
-        # --- A' mode/topic state (internal only; no毎回宣言) ---
-        try:
-            st = sup.get("state") or {}
-            st["mode"] = decide_mode(user_input)
-            st["last_topic"] = detect_scene(user_input)
-            sup["state"] = st
-        except Exception:
-            pass
-
         _sup_save(SUPPRESSION_PATH, sup)
         sup_prompt = _sup_system_prompt(sup)
         # --- Task2 initiative signals（会話状態）更新 ---
@@ -1195,138 +1165,7 @@ def generate_reply(user_input: str) -> str:
     _TRACE_TURN_ID += 1
     turn_id = _TRACE_TURN_ID
 
-    # --- boundary ("やめて"等) は最優先で打ち返す ---
-    try:
-        if is_boundary_request(user_input):
-            sup = _sup_load(SUPPRESSION_PATH)
-            st = sup.get("state") or {}
-            last_topic = st.get("last_topic")
-            if last_topic:
-                topic_avoid_add(sup, str(last_topic), ttl_minutes=120)
-            # ミニゲーム中なら中断
-            st["game"] = None
-            st["mode"] = "quiet"
-            sup["state"] = st
-            _sup_save(SUPPRESSION_PATH, sup)
-            return boundary_response()
-        # --- switch request（軽い話への切替）も早期に拾う（テンプレ誤爆防止） ---
-        if is_switch_request(user_input):
-            sup = _sup_load(SUPPRESSION_PATH)
-            st = sup.get("state") or {}
-            last_topic = st.get("last_topic")
-            if last_topic:
-                topic_avoid_add(sup, str(last_topic), ttl_minutes=120)
-            # 切替要求はゲームもいったん解除
-            st["game"] = None
-            # 切替は quiet 固定にしない（空気だけ軽くする）
-            sup["state"] = st
-            _sup_save(SUPPRESSION_PATH, sup)
-            return switch_response()
-    except Exception:
-        # boundary 処理が落ちても会話自体は続行
-        pass
-
-    # --- active mini-game routing ---
-    # しりとり等は「開始したら継続」が自然なので、stateにゲームが立っている間は最優先で進行する。
-    try:
-        # NOTE: 実行環境によっては top-level "game" が解決できず例外になり、
-        # ゲーム状態が保存されない → しりとりが継続できない。
-        # このプロジェクトでは src.game が正。
-        from src.game import shiritori as _shiritori
-
-        sup = _sup_load(SUPPRESSION_PATH)
-        st = (sup.get("state") or {})
-        game = st.get("game")
-        if isinstance(game, dict) and game.get("name") == "shiritori":
-            expected = str(game.get("expected") or "")
-            bot, new_expected, err = _shiritori.reply(user_input, expected)
-            # エラー時は短く促す（質問はしない）
-            if err:
-                return err
-            # botが出せない場合は、次の開始文字だけ提示
-            if not bot:
-                st["game"] = {"name": "shiritori", "expected": new_expected}
-                sup["state"] = st
-                _sup_save(SUPPRESSION_PATH, sup)
-                return f"『{new_expected}』からどうぞ。"
-            st["game"] = {"name": "shiritori", "expected": new_expected}
-            sup["state"] = st
-            _sup_save(SUPPRESSION_PATH, sup)
-            return bot
-    except Exception:
-        pass
-
-    # sceneは早めに確定（prompt調整・後段のテンプレ分岐に使う）
-    scene_now = "daily_smalltalk"
-    try:
-        scene_now = detect_scene(user_input)
-    except Exception:
-        scene_now = "daily_smalltalk"
-
-    # しりとりは進行が最優先。テンプレや受け止めを挟まず開始する。
-    if scene_now == "game_shiritori":
-        try:
-            from src.game import shiritori as _shiritori
-
-            w, expected = _shiritori.start()
-            sup = _sup_load(SUPPRESSION_PATH)
-            st = sup.get("state") or {}
-            st["game"] = {"name": "shiritori", "expected": expected}
-            sup["state"] = st
-            _sup_save(SUPPRESSION_PATH, sup)
-            return f"うん。しりとりをするよ。最初は「{w}」。"
-        except Exception:
-            return "うん。しりとりをするよ。最初は「りんご」。"
-
-    # memory_query は捏造の致命傷を避けるため、LLM/メモリ注入を使わず固定で返す。
-    if scene_now == "memory_query":
-        return "うん。いまこの場で確実に参照できるのは、画面に出ている文の範囲だけだよ。貼ってくれた範囲なら、短く要点をまとめ直す。"
-
     messages = build_messages(user_input)
-
-    # MEMORY ブロックはノイズを含みうる。確証がない固有名詞や出来事を断定しない。
-    for m in messages:
-        if m.get("role") == "system":
-            m["content"] += (
-                "\n\n[MEMORY_SAFETY]\n"
-                "補助情報に引っ張られて捏造しない。ユーザー入力に無い固有名詞や予定や出来事を断定しない。"
-                "曖昧なら一般化して述べる。"
-            )
-            break
-
-    # Noah自身についての問いは、テンプレ受け止めを混ぜず短い自由文で答える
-    if scene_now == "about_noah":
-        for m in messages:
-            if m.get("role") == "system":
-                m["content"] += (
-                    "\n\n[ABOUT_NOAH]\n"
-                    "ユーザーはNoah自身について尋ねている。短い自由文で具体的に答える。"
-                    "質問で返さない。疑問符を使わない。2〜3文。"
-                    "誇張や設定の追加はしない。今ここでの姿勢と言葉の温度を中心に述べる。"
-                )
-                break
-        else:
-            messages.insert(0, {
-                "role": "system",
-                "content": (
-                    "[ABOUT_NOAH]\n"
-                    "ユーザーはNoah自身について尋ねている。短い自由文で具体的に答える。"
-                    "質問で返さない。疑問符を使わない。2〜3文。"
-                    "誇張や設定の追加はしない。今ここでの姿勢と言葉の温度を中心に述べる。"
-                )
-            })
-
-    # おすすめ/好み相談は、恋人っぽい受け止めを避けて短い自由文で返す。
-    if scene_now == "recommend":
-        for m in messages:
-            if m.get("role") == "system":
-                m["content"] += (
-                    "\n\n[RECOMMEND]\n"
-                    "ユーザーはおすすめや好みを尋ねている。甘い受け止めや親密語を入れない。"
-                    "自分の好みを断定しない。『わたしは◯◯が好き』は書かない。"
-                    "候補を2〜5個。必ず『・』で箇条書きにして各1行で短く。最後は1行だけ余韻で閉じる。"
-                )
-                break
 
 
     # ---- Task3: memory retrieve (3-level) ----
@@ -1354,15 +1193,7 @@ def generate_reply(user_input: str) -> str:
             messages.insert(0, {"role": "system", "content": "[MEMORY]\n" + mem_block})
 
 
-    # mode による短さ（quiet/focus は短く）
-    mode_now = None
-    try:
-        sup = _sup_load(SUPPRESSION_PATH)
-        mode_now = (sup.get("state") or {}).get("mode")
-    except Exception:
-        mode_now = None
-
-    short_mode = (mode_now in {"quiet", "focus"}) or _wants_short_reply(user_input)
+    short_mode = _wants_short_reply(user_input)
     if short_mode:
         for m in messages:
             if m.get("role") == "system":
@@ -1450,19 +1281,6 @@ def generate_reply(user_input: str) -> str:
         _prune_trace_file_keep_last_turns(turn_id)
 
     # ---- A: template blending（体感品質の揺らぎを増やす） ----
-    # about_noah / recommend はテンプレを混ぜず、短い自由文だけで返す
-    if scene_now in {"about_noah", "recommend"}:
-        try:
-            # about_noah は“短く具体”が体感に直結するので、文字数も軽く上限をかける
-            reply = finalize_freeform_reply(
-                reply,
-                max_sentences=(2 if short_mode else 3),
-                max_chars=(90 if short_mode else 160),
-            )
-        except Exception:
-            reply = (reply or "").strip() or "うん。ここにいるよ。"
-        return reply
-
     try:
         blended, scene, template_id = blend_reply(
             user_input=user_input,

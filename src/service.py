@@ -207,14 +207,22 @@ def run_http_service(host: str = HOST, port: int = PORT, stop_event=None) -> Non
         httpd = ThreadingHTTPServer((host, port), NoahIPCHandler)
     except OSError as e:
         if getattr(e, "errno", None) == 48:  # macOS: Address already in use
-            print(f"[Noah IPC] port {port} already in use; skipping HTTP server")
+            try:
+                from .startup_display import debug
+                debug(f"[Noah IPC] port {port} already in use; skipping HTTP server")
+            except Exception:
+                pass
             return
         raise
 
     # stop_event を見るために、handle_request が定期的に戻るようにする
     httpd.timeout = 0.5
 
-    print(f"[Noah IPC] listening on http://{host}:{port}")
+    try:
+        from .startup_display import debug
+        debug(f"[Noah IPC] listening on http://{host}:{port}")
+    except Exception:
+        pass
     try:
         while True:
             if stop_event is not None and stop_event.is_set():
@@ -227,4 +235,8 @@ def run_http_service(host: str = HOST, port: int = PORT, stop_event=None) -> Non
             httpd.server_close()
         except Exception:
             pass
-        print("[Noah IPC] server stopped")
+        try:
+            from .startup_display import debug
+            debug("[Noah IPC] server stopped")
+        except Exception:
+            pass
