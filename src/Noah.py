@@ -63,7 +63,6 @@ from .paths import (
     RUNTIME_STATE_PATH,
 )
 
-from src.dialogue.templating import blend_reply
 
 from .suppression import (
     _sup_load,
@@ -137,9 +136,11 @@ SYSTEM_CORE_PROMPT = """
 - 短くても冷たくしない。やわらかい受け止めを1つ入れる（「うん」「そっか」「それ、うれしいね」「大丈夫だよ」）。
 - しっとりした余韻の描写を1フレーズだけ添えてよい。
 
-【出力の型（必須）】
-- 2〜3文まで。
-- 受け止め1文 → 連想/描写1文 → 余韻で閉じる（句点で終える）。
+【出力の型】
+- 原則1〜3文。必要なときだけ4文まで。
+- 毎回同じ構文にしない。受け止め、軽口、短い具体、余韻のどれを使うかは文脈で選ぶ。
+- テンプレ文をなぞらない。「ここにいるよ」「そばにいるよ」「いまの空気」などの常套句を連発しない。
+- 感情の蓄積は説明せず、言葉の温度・距離・軽さにだけ滲ませる。
 
 【おすすめ/候補】
 - 質問で返さず、確信のある候補を2〜5個。各1行で短く。
@@ -1035,6 +1036,19 @@ def build_messages(user_input: str):
             )
         })
 
+    # 感情・関係性・嗜好の蓄積を、テンプレではなく発話の燃料として渡す
+    affective_context = load_context()
+    if affective_context:
+        messages.append({
+            "role": "developer",
+            "content": (
+                "以下はNoahがこれまでの会話から蓄積した文脈です。"
+                "これは台詞テンプレではありません。文をコピーせず、現在の発話の温度、軽さ、距離感、軽口の方向だけに反映してください。"
+                "同じ締め句や同じ受け止めを繰り返さず、今回のユーザー入力に直接返してください。\n\n"
+                f"{affective_context[:1600]}"
+            )
+        })
+
     # 質問が多いと指摘されたら、質問を止める（しばらく）
     if detect_question_complaint(user_input):
         messages.append({
@@ -1280,19 +1294,9 @@ def generate_reply(user_input: str) -> str:
     with _TRACE_LOCK:
         _prune_trace_file_keep_last_turns(turn_id)
 
-    # ---- A: template blending（体感品質の揺らぎを増やす） ----
-    try:
-        blended, scene, template_id = blend_reply(
-            user_input=user_input,
-            llm_reply=reply,
-            runtime_state_path=RUNTIME_STATE_PATH,
-            short_mode=short_mode,
-        )
-        _get_logger().info("TEMPLATE scene=%s template_id=%s", scene, template_id)
-        reply = blended
-    except Exception as e:
-        # 失敗しても元の返答は返す
-        log_error("TEMPLATE_BLEND", e, {"user_input": user_input})
+    # ---- Affective output: テンプレ合成はしない ----
+    # LLMが、蓄積された状態・記憶・直近文脈をもとに生成した言葉をそのまま返す。
+    # ここで固定フレーズを足すとロボット感が出るため、後段合成は禁止。
 
     # （以下、履歴保存など既存処理…）
     return reply
