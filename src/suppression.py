@@ -16,6 +16,11 @@ DEFAULT_SUPPRESSION: Dict[str, Any] = {
         "initiative_suppressed_reason": None,  # str or None
         "last_trigger": None,                  # ISO8601 str or None
         "cooldown_turns_remaining": 0,         # int
+        # --- A' additions (mode / boundary / topic avoid) ---
+        "mode": "normal",                      # normal | quiet | focus
+        "last_topic": None,                     # str or None
+        "topic_avoid": [],                      # list[{topic:str, until:ISO8601}]
+        "game": None,                           # {name:str, expected:str} or None
     },
     "counters": {
         "silent_hits": 0,
@@ -78,6 +83,10 @@ def _sup_load(path: str) -> Dict[str, Any]:
     st.setdefault("initiative_suppressed_reason", None)
     st.setdefault("last_trigger", None)
     st.setdefault("cooldown_turns_remaining", 0)
+    st.setdefault("mode", "normal")
+    st.setdefault("last_topic", None)
+    st.setdefault("topic_avoid", [])
+    st.setdefault("game", None)
 
     ct = data["counters"]
     ct.setdefault("silent_hits", 0)
@@ -85,6 +94,76 @@ def _sup_load(path: str) -> Dict[str, Any]:
     ct.setdefault("no_question_hits", 0)
 
     return data
+
+
+def _parse_iso_maybe(iso: str):
+    try:
+        return datetime.fromisoformat(iso)
+    except Exception:
+        return None
+
+
+def topic_avoid_prune(data: Dict[str, Any]) -> None:
+    """期限切れの topic_avoid を落とす（in-place）。"""
+    try:
+        st = (data or {}).get("state") or {}
+        items = st.get("topic_avoid") or []
+        now = datetime.now(JST)
+        kept = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            until = _parse_iso_maybe(str(it.get("until") or ""))
+            if until and until > now:
+                kept.append({"topic": it.get("topic"), "until": until.isoformat()})
+        st["topic_avoid"] = kept
+        data["state"] = st
+    except Exception:
+        return
+
+
+def topic_avoid_add(data: Dict[str, Any], topic: str, *, ttl_minutes: int = 120) -> None:
+    """話題の短期抑制を追加（in-place）。"""
+    if not topic:
+        return
+    try:
+        st = (data or {}).get("state") or {}
+        items = st.get("topic_avoid") or []
+        now = datetime.now(JST)
+        until = now + timedelta(minutes=int(ttl_minutes))
+
+        # 既存 topic があれば延長
+        updated = False
+        new_items = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if str(it.get("topic")) == str(topic):
+                new_items.append({"topic": topic, "until": max(until, _parse_iso_maybe(str(it.get("until") or "")) or until).isoformat()})
+                updated = True
+            else:
+                new_items.append(it)
+
+        if not updated:
+            new_items.append({"topic": topic, "until": until.isoformat()})
+
+        st["topic_avoid"] = new_items
+        data["state"] = st
+        topic_avoid_prune(data)
+    except Exception:
+        return
+
+
+def topic_avoid_has(data: Dict[str, Any], topic: str) -> bool:
+    if not topic:
+        return False
+    try:
+        topic_avoid_prune(data)
+        st = (data or {}).get("state") or {}
+        items = st.get("topic_avoid") or []
+        return any(isinstance(it, dict) and str(it.get("topic")) == str(topic) for it in items)
+    except Exception:
+        return False
 
 
 def _sup_save(path: str, data: Dict[str, Any]) -> None:
