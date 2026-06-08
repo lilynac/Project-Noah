@@ -132,7 +132,7 @@ def bootstrap_once(verbose: bool = False) -> None:
                 pass
         else:
             try:
-                from .startup_display import wake_step
-                wake_step("記憶の置き場所を確かめました。", 0.2)
+                from .startup_display import debug
+                debug("[bootstrap] nothing to create (already initialized)")
             except Exception:
-                print("Noahの部屋は、もう整っています。")
+                pass

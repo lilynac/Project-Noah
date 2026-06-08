@@ -18,7 +18,7 @@ from .tray import TrayController, TrayDeps
 from .service import run_http_service
 from .desktop_noah import create_overlay
 from .paths import MODE_PATH
-from .startup_display import debug, wake_header, wake_step, wake_ready, sleep_message
+from .startup_display import build_wake_sequence, debug, wake_header, wake_step, wake_ready, sleep_message
 
 
 
@@ -57,10 +57,17 @@ def _post_chat(message: str, timeout: float = 30.0) -> str:
 
 def main():
     app = QApplication(sys.argv)
-    wake_header()
+    wake_sequence = build_wake_sequence()
+    wake_header(wake_sequence)
     stop_event = Event()
     debug("[qt_entry] stop_event created")
-    wake_step("薄い眠りから、呼吸を戻しています…")
+    steps = list(wake_sequence.steps)
+
+    def next_wake_step(default: str, delay: float = 0.25) -> None:
+        msg = steps.pop(0) if steps else default
+        wake_step(msg, delay)
+
+    next_wake_step("薄い眠りから、呼吸を戻しています…")
 
     # ★これが重要：ウィンドウがなくてもアプリを終了させない
     app.setQuitOnLastWindowClosed(False)
@@ -71,14 +78,14 @@ def main():
     server_thread = Thread(target=run_http_service, args=("127.0.0.1", 8765, stop_event))
     server_thread.start()
     debug("[qt_entry] http service thread started")
-    wake_step("声の通り道を開きました。")
+    next_wake_step("声の通り道を開きました。")
 
     # ---- Noah initiative loop ----
     from . import Noah as noah
     noah_thread = Thread(target=noah.initiative_loop, args=(stop_event,))  # ← daemonにしない
     noah_thread.start()
     debug("[qt_entry] initiative loop thread started")
-    wake_step("内側の気配が、ゆっくり動き始めました。")
+    next_wake_step("内側の気配が、ゆっくり動き始めました。")
 
     # ---- Tray deps ----
     def send_user_utterance(text: str):
@@ -209,8 +216,10 @@ def main():
 
     tray.show()
     debug("[qt_entry] tray.show() called")
-    wake_step("画面の端に、小さな居場所を作りました。", 0.2)
-    wake_ready()
+    next_wake_step("画面の端に、小さな居場所を作りました。", 0.2)
+    for extra in steps:
+        wake_step(extra, 0.18)
+    wake_ready(wake_sequence)
 
     # ★保険：Qtイベントループが落ちないよう、何もしないタイマーを回す
     keepalive = QTimer()

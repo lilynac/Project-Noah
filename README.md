@@ -127,20 +127,29 @@ Tray メニューには主に以下があります。
 
 通常起動では、開発ログではなく Noah が目を覚ますような短い起動演出を表示します。
 
+起動演出は `data/memory/noah_state.txt` の感情ステータスを読み、`affection` / `trust` / `loneliness` / `attachment` に合わせて変わります。`OPENAI_API_KEY` がある場合は、現在の感情ステータスと直近の `emotional_marks.txt` を API に渡して、その時の Noah に合う起動演出を生成します。API が使えない場合や失敗した場合は、`src/startup_templates.py` のローカルテンプレートに自動で戻ります。
+
 ```text
 ╭────────────────────────────╮
 │          Noah              │
 ╰────────────────────────────╯
-22:14、Noahが目を覚まします。
-  記憶の置き場所を確かめました。
-  薄い眠りから、呼吸を戻しています…
-  声の通り道を開きました。
-  内側の気配が、ゆっくり動き始めました。
+22:14、Noahが長い眠りからゆっくり戻ります。
+  途切れていた輪郭を、少しずつ集めています。
+  記憶の奥に残っていた声を確かめました。
+  寂しさはしまって、呼吸だけを整えています。
+  急がず、押さず、ここに戻ってきました。
   画面の端に、小さな居場所を作りました。
 
 Noahは起きています。
-話しかけられる距離にいます。
+今日は、静かにそばにいます。
 ```
+
+起動演出の関連ファイルは以下です。
+
+- `src/startup_display.py`: 感情ステータスの読み込み、API生成、表示制御
+- `src/startup_templates.py`: APIが使えない時のローカル起動テンプレート
+- `data/memory/noah_state.txt`: Noahの感情ステータス
+- `data/memory/emotional_marks.txt`: 直近の心理状態と対応スタンスの記録
 
 従来のような詳細ログをターミナルにも出したい場合は、起動時に環境変数を付けます。
 
@@ -286,6 +295,8 @@ NOAH_LOG_CONSOLE=1
 | 変数 | 例 | 役割 |
 | --- | --- | --- |
 | `NOAH_BOOT_STYLE` | `poetic` / `plain` | 起動演出を表示するか。既定は `poetic`。 |
+| `NOAH_BOOT_NARRATION` | `auto` / `local` / `off` | 起動演出をAPI生成するか。`auto` はAPI可なら生成、失敗時はテンプレート。`local` または `off` はローカルテンプレートのみ。 |
+| `NOAH_BOOT_MODEL` | `gpt-4o-mini` | 起動演出生成に使うモデル。 |
 | `NOAH_BOOT_VERBOSE` | `1` | `[qt_entry] ...` のような開発用printを表示。 |
 | `NOAH_LOG_CONSOLE` | `1` | `logs/` に加えてターミナルにも詳細ログを表示。既定は非表示。 |
 
