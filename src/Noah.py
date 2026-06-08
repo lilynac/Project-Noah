@@ -1644,14 +1644,10 @@ def initiative_loop(stop_event=None):
             # --- Task2: 3-layer decision engine ---
             logger.info("INITIATIVE_MEMORY_POINT ns=initiative before_retrieve")
 
-            logger.info("INITIATIVE_RETRIEVE_IMPORT_BEGIN ns=initiative")
-            from src.memory.retrieve import retrieve_memories
-            logger.info("INITIATIVE_RETRIEVE_IMPORT_DONE ns=initiative")
-
-            logger.info("INITIATIVE_RETRIEVE_CALL_BEGIN ns=initiative")
-            mem = retrieve_memories(q, top_narrative=2, top_summary=3, top_episode=0)
-            logger.info("INITIATIVE_RETRIEVE_CALL_DONE ns=initiative")
-
+            # q は recent_turns から作る必要があるため、ここでは retrieve しない。
+            # 以前はこの位置で未定義の q を使って retrieve_memories(q, ...) を呼び、
+            # initiative_loop が例外で止まりやすくなっていた。
+            # memory retrieve は下の DecisionEngine 分岐内で recent_turns 取得後に行う。
 
             if DecisionEngine is None or load_signals is None:
                 # まだ導入できてない場合は旧ゲートにフォールバック
@@ -1694,13 +1690,18 @@ def initiative_loop(stop_event=None):
                 except Exception as e:
                     log_error("INITIATIVE_MEMORY_RETRIEVE", e, {})
 
+                # Noahの感情状態は、DecisionEngineでは発話の強制ではなく
+                # desire impulse の小さな確率補正としてだけ使う。
+                state = load_state_snippet()
+
                 eng = DecisionEngine()
                 dec = eng.evaluate(
                     ini,
                     now_ts=now,
                     persistent_suppressed=persistent,
                     recent_turns=recent_turns,
-                    memory_ctx=memory_ctx, 
+                    memory_ctx=memory_ctx,
+                    affective_state=state,
                 )
 
                 # ★ログ（必須）：3レイヤの理由が追える
@@ -1727,14 +1728,6 @@ def initiative_loop(stop_event=None):
 
                 set_initiative_state("ON", "ready")
 
-                # speakするので、signals更新（Noahが喋った扱い）
-                try:
-                    if touch_noah_message and save_signals:
-                        touch_noah_message(ini, now_ts=now, is_initiative=True)
-                        save_signals(ini)
-                except Exception:
-                    pass
-
             # --- speak path (既存の生成+重複排除+emit を維持) ---
 
             # NOTE (Runner policy):
@@ -1756,8 +1749,12 @@ def initiative_loop(stop_event=None):
             except Exception:
                 pass
 
-            # 既存の “余韻(research)” や state を使いたければここで渡す
-            state = load_state_snippet()
+            # 既存の “余韻(research)” や state を使う。
+            # DecisionEngine 分岐では先に読んでいるので、旧フォールバック経路だけここで補う。
+            try:
+                state
+            except NameError:
+                state = load_state_snippet()
             # research_phrase は、今は空でOK（あとで generate_initiative のロジックから移植できる）
             today = datetime.now().date()
             research_phrase = build_research_phrase(
@@ -1777,6 +1774,9 @@ def initiative_loop(stop_event=None):
                 recent_turns=recent_turns,
                 state_snippet=state,
                 research_phrase=research_phrase,
+                llm_client=client,
+                model="gpt-4o-mini",
+                memory_ctx=memory_ctx,
             )
             text = gen.text
 
@@ -1792,6 +1792,9 @@ def initiative_loop(stop_event=None):
                         state_snippet=state,
                         research_phrase=research_phrase,
                         seed=base_seed + i + 1,
+                        llm_client=client,
+                        model="gpt-4o-mini",
+                        memory_ctx=memory_ctx,
                     )
                     if not _initiative_is_duplicate(gen2.text):
                         text_alt = gen2.text
@@ -1812,6 +1815,16 @@ def initiative_loop(stop_event=None):
 
             if not emit_initiative(text):
                 continue
+
+            # 送信に成功した時だけ「Noahが自発発話した」と記録する。
+            # 無反応なら consecutive_initiatives は増えたまま残り、
+            # ユーザーが返した時は touch_user_message 側で 0 に戻る。
+            try:
+                if touch_noah_message and save_signals:
+                    touch_noah_message(ini, now_ts=time.time(), is_initiative=True)
+                    save_signals(ini)
+            except Exception:
+                pass
 
             with _state_lock:
                 _last_noah_initiative_at = time.time()
