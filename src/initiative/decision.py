@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 from src.initiative.signals import InitiativeSignals
 from src.initiative.layers import OpportunityLayer, SuppressionLayer, ValueLayer
+from src.emotion_model import build_initiative_emotion_bias, emotion_state_preview
 
 
 def _clamp01(x: float) -> float:
@@ -88,6 +89,7 @@ class DecisionEngine:
         recent_turns: Optional[list[str]] = None,
         memory_ctx=None,
         affective_state: Optional[str] = None,
+        emotion_state: Optional[dict[str, Any]] = None,
     ) -> Decision:
 
         now = time.time() if now_ts is None else now_ts
@@ -111,7 +113,13 @@ class DecisionEngine:
         reasons: list[str] = []
 
         # ★ suppressでも必ず見えるように先に計算
-        final_score = opp_res.score * v
+        base_final_score = opp_res.score * v
+        emotion_bias, emotion_bias_reasons = build_initiative_emotion_bias(
+            emotion_state,
+            suppressed=bool(sup_res.suppress),
+            mode=signals.mode,
+        )
+        final_score = _clamp01(base_final_score + emotion_bias)
 
         impulse_p = self._affection_impulse_probability(
             signals,
@@ -127,6 +135,12 @@ class DecisionEngine:
             "value": {"score": v, "reasons": val_res.reasons, "style": val_res.style},
             "suppression": {"suppress": sup_res.suppress, "strength": sup_res.strength, "reasons": sup_res.reasons},
             "affection_impulse": {"p": impulse_p, "enabled": self.cfg.affection_impulse_enabled},
+            "emotion_bias": {
+                "bias": emotion_bias,
+                "reasons": emotion_bias_reasons,
+                "state": emotion_state_preview(emotion_state),
+                "base_final_score": base_final_score,
+            },
             "final_score": final_score,  # ★ここで必ず入れる
         }
 

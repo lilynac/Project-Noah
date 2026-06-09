@@ -63,10 +63,17 @@ def initiative_loop(stop_event, runtime=None):
                 except Exception as e:
                     __env['log_error']('INITIATIVE_MEMORY_RETRIEVE', e, {})
                 state = __env['load_state_snippet']()
+                emotion_state = None
+                try:
+                    from src.emotion_model import load_emotion_state
+                    emotion_state = load_emotion_state(__env['RUNTIME_STATE_PATH']).to_dict()
+                except Exception as e:
+                    __env['log_error']('INITIATIVE_EMOTION_LOAD', e, {})
                 eng = __env['DecisionEngine']()
-                dec = eng.evaluate(ini, now_ts=now, persistent_suppressed=persistent, recent_turns=recent_turns, memory_ctx=memory_ctx, affective_state=state)
+                dec = eng.evaluate(ini, now_ts=now, persistent_suppressed=persistent, recent_turns=recent_turns, memory_ctx=memory_ctx, affective_state=state, emotion_state=emotion_state)
                 try:
                     logger.info(f"INITIATIVE_EVAL ns=initiative opp={dec.debug.get('opportunity', {})} val={dec.debug.get('value', {})} sup={dec.debug.get('suppression', {})} final={dec.debug.get('final_score')} thr={dec.debug.get('threshold')} speak={dec.speak} cooldown={dec.cooldown_sec}")
+                    logger.info(f"INITIATIVE_EMOTION_BIAS ns=initiative bias={dec.debug.get('emotion_bias', {})}")
                 except Exception:
                     pass
                 if not dec.speak:

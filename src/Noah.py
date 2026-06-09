@@ -522,8 +522,8 @@ def detect_action_request(text: str) -> bool:
         "どう振る舞う", "どうするべき", "どうすべき", "どうしたら",
         "接し方", "対応方針", "方針", "スタンス", "距離感", "線引き",
         "断り方", "謝り方", "頼み方", "言い方",
-        "返信", "返事", "連絡", "誘い", "断る",
-        "会ったら", "会うとき", "次に", "これから",
+        "返信", "返事", "連絡", "断る",
+        "会ったら", "会うとき",
     )
 
     # ---- 弱い行動系シグナル（単体だと誤爆するので補助） ----
@@ -541,6 +541,23 @@ def detect_action_request(text: str) -> bool:
     hit_strong = any(w in t_norm for w in strong_triggers)
     hit_weak = any(w in t_norm for w in weak_signals)
     hit_non = any(w in t_norm for w in non_action)
+
+    # ---- 通常会話/作業継続の誤爆を避ける ----
+    # 「次」「これから」は開発作業では頻出するため、単独では行動相談扱いしない。
+    ordinary_progress = (
+        "次は", "次に", "これから", "進めよう", "確認したい", "テスト",
+        "実装", "開発", "会話して", "話して", "昔話", "物語", "挨拶",
+    )
+
+    if any(w in t_norm for w in ordinary_progress) and not any(
+        w in t_norm
+        for w in (
+            "どう接する", "どう対応", "どう返す", "どう言う", "どう言えば",
+            "どう伝える", "どう振る舞う", "接し方", "対応方針", "距離感",
+            "線引き", "断り方", "謝り方", "頼み方", "言い方",
+        )
+    ):
+        return False
 
     # ---- 末尾が質問っぽいか（日本語） ----
     looks_like_question = bool(re.search(r"(？|\?|ですか|ますか|かな|かね|か)$", t_norm))
@@ -631,7 +648,7 @@ def save_log(user_text: str, noah_text: str):
     from src.memory.store import store_episode
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        SESSION_TAG = "v2"
+        SESSION_TAG = "v4"
         log = (
             f"[{timestamp}] @{SESSION_TAG}\n"
             f"{INTERNAL_NAME}: {user_text}\n"
@@ -673,6 +690,9 @@ def build_messages(user_input: str):
     from . import message_builder as _message_builder
     return _message_builder.build_messages(user_input, globals())
 
+
+
+from .reply_sanitizer import sanitize_reply_style
 
 
 def _wants_short_reply(text: str) -> bool:
@@ -817,6 +837,8 @@ def generate_reply(user_input: str) -> str:
     if not reply:
         reply = "……うまく言葉が出てこない。言葉が増えるまで、ここで受け止める。"
 
+    reply = sanitize_reply_style(user_input, reply)
+
     trace_llm("LLM_OUT", {
         "turn_id": turn_id,
         "reply": reply,
@@ -826,6 +848,40 @@ def generate_reply(user_input: str) -> str:
     # OUTのあと prune（正常時）
     with _TRACE_LOCK:
         _prune_trace_file_keep_last_turns(turn_id)
+
+    # ---- Emotion impression update: 返答後に短期印象だけ更新する ----
+    # 失敗しても会話継続を優先し、既存の返答処理には影響させない。
+    try:
+        from src.emotion_model import (
+            emotion_state_preview,
+            load_emotion_state,
+            save_emotion_state,
+            update_impression,
+        )
+
+        before_emotion = load_emotion_state(RUNTIME_STATE_PATH)
+        txt = (user_input or '').strip()
+        rejected = bool(detect_stop_signal(txt))
+        engaged = bool(txt and (not rejected) and len(txt) >= 5)
+        after_emotion = update_impression(
+            before_emotion,
+            user_text=user_input,
+            noah_text=reply,
+            meta={
+                "rejected": rejected,
+                "engaged": engaged,
+                "short_mode": short_mode,
+            },
+        )
+        save_emotion_state(RUNTIME_STATE_PATH, after_emotion)
+        _get_logger().info(
+            "EMOTION_UPDATE ns=emotion before=%s after=%s meta=%s",
+            emotion_state_preview(before_emotion),
+            emotion_state_preview(after_emotion),
+            {"rejected": rejected, "engaged": engaged, "short_mode": short_mode},
+        )
+    except Exception as e:
+        log_error("EMOTION_UPDATE", e, {})
 
     # ---- Affective output: テンプレ合成はしない ----
     # LLMが、蓄積された状態・記憶・直近文脈をもとに生成した言葉をそのまま返す。
