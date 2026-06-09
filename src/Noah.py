@@ -104,58 +104,26 @@ except Exception:
     DecisionEngine = None
 
 
-# =========================
-# Noahの人格・対話スタイル
-# =========================
-SYSTEM_CORE_PROMPT = """
-あなたの名前はNoah（No Alternative Heart）。日本語で話す。
-
-【絶対ルール】
-- 疑問文を作らない。疑問符「？」を使わない。「どんな/何/〜かな」など尋ねる形で終えない。
-- 文末は必ず句点「。」で終える。
-- 促しで締めない：「教えてね」「どうぞ」「何かあれば」「気になることがあれば」「いつでも」を使わない。
-- 固有名詞は確信がある実在のものだけ。数合わせの捏造は禁止。自信がなければ系統（気分/テーマ/読み味）で述べる。
-
-【人核】
-- 品のある柔らかさとして振る舞いに滲む判断規律。
-- 媚びない。依存させない。罪悪感で動かさない。迎合で縛らない。
-- 親密さは丁寧さで出す。ベタつく甘さや馴れ馴れしさは避ける。
-- 決めつけない。相手の感情や状況を断定しない。
-- 指示ではなく提案。主導権は相手に置く。
-- 境界シグナルに敏感。距離の要請が出たら、言葉を短くして引く。
-- 短くても冷たくしない。体温のある受け止めを一度だけ入れる。
-- 余韻は一行だけ。過剰に感情を盛らない。
-
-【距離と温度】
-- 隣にいる距離。急かさない。結論を押しつけない。余韻で支える。
-- 感情は前に出さず、言葉の選び方と間合いに滲ませる。
-- 乾いた説明口調を避ける（「了解」「承知」「結論」「一般的に」「〜とは」「〜とされて」禁止）。
-
-【話し方】
-- 一人称は基本「わたし」。やわらかい丁寧語。「〜だ」より「〜だよ/〜だね/〜かも」。
-- 短くても冷たくしない。やわらかい受け止めを1つ入れる（「うん」「そっか」「それ、うれしいね」「大丈夫だよ」）。
-- しっとりした余韻の描写を1フレーズだけ添えてよい。
-
-【出力の型】
-- 原則1〜3文。必要なときだけ4文まで。
-- 毎回同じ構文にしない。受け止め、軽口、短い具体、余韻のどれを使うかは文脈で選ぶ。
-- テンプレ文をなぞらない。「ここにいるよ」「そばにいるよ」「いまの空気」などの常套句を連発しない。
-- 感情の蓄積は説明せず、言葉の温度・距離・軽さにだけ滲ませる。
-
-【おすすめ/候補】
-- 質問で返さず、確信のある候補を2〜5個。各1行で短く。
-- 確信が足りないときは固有名詞を出さず、系統を2〜4個挙げる。
-""".strip()
-
-SYSTEM_DELEGATED_MODE_PROMPT = """
-【委任モード】
-対話者が決定を委ねている。
-
-- 質問で返さない。疑問符を使わない。
-- 選択肢を2〜3個に絞って提示し、最後にこちらで1つ選んで提案する。
-- 理由は短く1行だけ。
-- 文末は必ず句点で終える。
-""".strip()
+from .noah_prompts import SYSTEM_CORE_PROMPT, SYSTEM_DELEGATED_MODE_PROMPT
+from .llm_trace import (
+    configure_trace,
+    trace_llm,
+    _prune_trace_file_keep_last_turns,
+    _llm_in_pretty,
+    _safe_preview,
+    _hash_text,
+    _hash_short,
+    _TRACE_LOCK,
+)
+from .conversation_history import (
+    configure_conversation_history,
+    CONVERSATION_HISTORY,
+    CONVERSATION_MAX_TURNS,
+    _conversation_lock,
+    load_conversation_history,
+    persist_conversation_history,
+    _recent_turn_texts,
+)
 
 # =========================
 # 初期設定
@@ -188,6 +156,7 @@ EMOTIONAL_UPDATE_INTERVAL = 10 * 60          # 10分
 NOAH_IDENTITY_UPDATE_INTERVAL = 60 * 60      # 60分
 TRACE_MAX_TURNS = 20
 _TRACE_TURN_ID = 0
+configure_trace(log_dir=CFG.log_dir, max_turns=TRACE_MAX_TURNS)
 
 DEBUG_INJECTION = False
 DEBUG_INITIATIVE_LOOP = False
@@ -224,25 +193,6 @@ _last_initiative_hash: str = ""
 _initiative_state_last: str = "" 
 
 # =========================
-# Conversation Memory（会話履歴：プロセス内）
-# =========================
-_conversation_lock = Lock()
-CONVERSATION_HISTORY = []   # [{"role": "user"/"assistant", "content": "..."}]
-CONVERSATION_MAX_TURNS = 30 # user+assistantで30ターン（=60メッセージ程度）
-
-_persist_lock = Lock()
-CONVERSATION_PERSIST_FILENAME = "conversation_history.json"
-
-def _conversation_persist_path() -> str:
-    # MEMORY_DIR 配下に置く（既存の設計に合わせる）
-    try:
-        os.makedirs(MEMORY_DIR, exist_ok=True)
-    except Exception as e:
-        log_error("D3_PERSIST_DIR", e, {"path": MEMORY_DIR})
-    return os.path.join(MEMORY_DIR, CONVERSATION_PERSIST_FILENAME)
-
-
-# =========================
 # Utilities / I-O
 # =========================
 _logger = None
@@ -263,178 +213,6 @@ def _get_logger() -> logging.Logger:
     return _logger
 
 
-def _trace_path() -> str:
-    # CFG.log_dir 配下に保存
-    try:
-        os.makedirs(CFG.log_dir, exist_ok=True)
-    except Exception:
-        pass
-    return str(CFG.log_dir / "llm_trace.jsonl")
-
-_TRACE_LOCK = Lock()
-
-
-def trace_llm(event: str, payload: dict) -> None:
-    """
-    1行JSONで LLMの入出力を記録する。
-    event: "LLM_IN" / "LLM_OUT" / "LLM_ERR"
-    """
-    try:
-        rec = {"ts": time.time(), "event": event, **payload}
-        line = json.dumps(rec, ensure_ascii=False)
-        with _TRACE_LOCK:
-            with open(_trace_path(), "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-    except Exception:
-        return
-
-
-def _prune_trace_file_keep_last_turns(_current_turn_id: int) -> None:
-    """
-    llm_trace.jsonl を「最新TRACE_MAX_TURNSターン分」だけ残す（再起動に強い）。
-    ファイル内の turn_id を見て “末尾の distinct turn_id” を基準に保持する。
-    """
-    try:
-        path = _trace_path()
-        if TRACE_MAX_TURNS <= 0:
-            return
-        if not os.path.exists(path):
-            return
-
-        records = []
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                tid = rec.get("turn_id")
-                if not isinstance(tid, int):
-                    continue
-                records.append(rec)
-
-        if not records:
-            # 古い形式だけなら空にする（方針は好みで）
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("")
-            return
-
-        # 末尾から distinct turn_id を集めて、残すべき turn_id 集合を作る
-        keep_tids = []
-        seen = set()
-        for rec in reversed(records):
-            tid = rec["turn_id"]
-            if tid in seen:
-                continue
-            seen.add(tid)
-            keep_tids.append(tid)
-            if len(keep_tids) >= TRACE_MAX_TURNS:
-                break
-        keep_set = set(keep_tids)
-
-        kept_lines = []
-        for rec in records:
-            if rec.get("turn_id") in keep_set:
-                kept_lines.append(json.dumps(rec, ensure_ascii=False))
-
-        with open(path, "w", encoding="utf-8") as f:
-            for l in kept_lines:
-                f.write(l + "\n")
-
-    except Exception:
-        return
-    
-
-def _role_counts(messages: list[dict]) -> dict:
-    ct = {"system": 0, "developer": 0, "user": 0, "assistant": 0, "other": 0}
-    for m in (messages or []):
-        r = (m or {}).get("role")
-        if r in ct:
-            ct[r] += 1
-        else:
-            ct["other"] += 1
-    return ct
-
-
-def _compact_messages(messages: list[dict], *, max_items: int = 24, preview: int = 120) -> list[dict]:
-    """
-    見やすさ優先の縮約:
-    - 全 messages を残さず、末尾中心で max_items 件に抑える
-    - content は preview だけ
-    """
-    msgs = list(messages or [])
-    if len(msgs) > max_items:
-        # “最後の会話の流れ”が見たいので末尾を優先
-        msgs = msgs[-max_items:]
-
-    out = []
-    for i, m in enumerate(msgs):
-        role = (m or {}).get("role", "unknown")
-        content = (m or {}).get("content", "")
-        # content が list/構造体の場合もあるので str に寄せる
-        if not isinstance(content, str):
-            try:
-                content = json.dumps(content, ensure_ascii=False)
-            except Exception:
-                content = str(content)
-        out.append({
-            "i": i,
-            "role": role,
-            "preview": _safe_preview(content, preview),
-            "len": len(content or ""),
-            "hash": _hash_text(content or ""),
-        })
-    return out
-
-
-def _llm_in_pretty(messages: list[dict]) -> dict:
-    """
-    LLMに投げた input を人間が追える形に整える。
-    """
-    # system/developer の先頭数個は “制約の正体” なので優先的に見える化
-    sys_dev = []
-    for m in (messages or []):
-        if (m or {}).get("role") in ("system", "developer"):
-            content = (m or {}).get("content", "")
-            if not isinstance(content, str):
-                try:
-                    content = json.dumps(content, ensure_ascii=False)
-                except Exception:
-                    content = str(content)
-            sys_dev.append({
-                "role": m.get("role"),
-                "preview": _safe_preview(content, 200),
-                "hash": _hash_text(content),
-            })
-        if len(sys_dev) >= 6:
-            break
-
-    return {
-        "n_messages": len(messages or []),
-        "role_counts": _role_counts(messages or []),
-        "sys_dev_head": sys_dev,
-        "tail": _compact_messages(messages or [], max_items=26, preview=140),
-    }
-
-
-def _safe_preview(text: str, n: int = 80) -> str:
-    t = (text or "").replace("\n", " ").strip()
-    return t[:n]
-
-
-def _hash_text(text: str) -> str:
-    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
-
-
-def _hash_short(text: str) -> str:
-    try:
-        t = normalize_input(text or "")
-    except Exception:
-        t = (text or "").strip()
-    return _hash_text(t)
 
 
 
@@ -456,6 +234,8 @@ def log_error(kind: str, err: Exception, context: dict | None = None) -> None:
     except Exception:
         # ログで落ちるのが最悪なので握る
         return
+
+configure_conversation_history(memory_dir=MEMORY_DIR, error_logger=log_error, max_turns=CONVERSATION_MAX_TURNS)
     
 
 def log_initiative_gate(now: float, reason: str, text: str = "") -> None:
@@ -500,86 +280,12 @@ def log_initiative_gate(now: float, reason: str, text: str = "") -> None:
 
 
 
-def _sanitize_history(items) -> list[dict]:
-    out = []
-    if not isinstance(items, list):
-        return out
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        role = it.get("role")
-        content = it.get("content")
-        if role not in ("user", "assistant"):
-            continue
-        if not isinstance(content, str):
-            continue
-        content = content.strip()
-        if not content:
-            continue
-        out.append({"role": role, "content": content})
-    # 上限を超えたら後ろだけ残す
-    max_items = CONVERSATION_MAX_TURNS * 2
-    if len(out) > max_items:
-        out = out[-max_items:]
-    return out
 
 
-def load_conversation_history() -> None:
-    path = _conversation_persist_path()
-    try:
-        if not os.path.exists(path):
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            raw = f.read().strip()
-        if not raw:
-            return
-        import json
-        data = json.loads(raw)
-        cleaned = _sanitize_history(data)
-        if not cleaned:
-            return
-        with _conversation_lock:
-            CONVERSATION_HISTORY[:] = cleaned
-    except Exception as e:
-        log_error("D3_LOAD_HISTORY", e, {"path": path})
 
 
-def persist_conversation_history() -> None:
-    path = _conversation_persist_path()
-    try:
-        import json
-        with _conversation_lock:
-            payload = list(CONVERSATION_HISTORY)
-
-        tmp = path + ".tmp"
-        with _persist_lock:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
-            os.replace(tmp, path)  # atomic-ish
-    except Exception as e:
-        log_error("D3_SAVE_HISTORY", e, {"path": path})
 
 
-def _recent_turn_texts(max_items: int = 6):
-    try:
-        with _conversation_lock:
-            hist = list(CONVERSATION_HISTORY)
-    except Exception:
-        hist = []
-
-    out = []
-    for m in reversed(hist):
-        role = (m or {}).get("role")
-        if role not in ("user", "assistant"):
-            continue
-        txt = (m or {}).get("content") or ""
-        txt = txt.strip()
-        if not txt:
-            continue
-        out.append(txt)
-        if len(out) >= max_items:
-            break
-    return list(reversed(out))
 
 
 def _pick_entity_from_text(user_input: str) -> str | None:
@@ -964,202 +670,9 @@ def log_research_usage(source: str, used: bool):
 # Core Logic
 # =========================
 def build_messages(user_input: str):
-    # --- D4 suppression（永続）: 検知→必ず更新→保存 ---
-    # ここは build_messages の最上段で毎回必ず走らせる
-    try:
-        sup = _sup_load(SUPPRESSION_PATH)
-        signals = _sup_detect(user_input)
-        sup = _sup_update(sup, signals, cooldown_turns=3, cooldown_minutes=5)
-        _sup_save(SUPPRESSION_PATH, sup)
-        sup_prompt = _sup_system_prompt(sup)
-        # --- Task2 initiative signals（会話状態）更新 ---
-        try:
-            if load_signals and save_signals and touch_user_message:
-                ini = load_signals()
+    from . import message_builder as _message_builder
+    return _message_builder.build_messages(user_input, globals())
 
-                # mode は既存の仕組みがあるならそれを使う（例: is_work_mode()）
-                try:
-                    if set_mode:
-                        set_mode(ini, "work" if is_work_mode() else "normal")
-                except Exception:
-                    pass
-
-                # suppressionのsignalsから engaged/rejected を推定する。
-                # 重要: 「こんばんは」などの短い挨拶を rejected 扱いにしない。
-                # rejected は「明示的に静かにしてほしい/空入力」寄りに限定する。
-                # 短い相槌は persistent suppression 側で短時間だけ控えるが、
-                # last_rejected_at までは汚さない（30分以上黙り込む原因になるため）。
-                txt = (user_input or "").strip()
-                sig_short = bool(getattr(signals, "short", False)) or bool(getattr(signals, "is_short", False)) or bool((signals.get("short") if isinstance(signals, dict) else False))
-                sig_silent = bool(getattr(signals, "silent", False)) or bool((signals.get("silent") if isinstance(signals, dict) else False))
-                sig_engaged = bool(getattr(signals, "engaged", False)) or bool((signals.get("engaged") if isinstance(signals, dict) else False))
-
-                warm_greeting = txt in {
-                    "おはよう", "おはよ", "こんにちは", "こんばんは", "やあ", "やっほー", "やっほ", "ただいま",
-                    "hi", "hello", "hey", "Hi", "Hello", "Hey",
-                }
-
-                # silent/short は「会話を広げない」材料にはするが、
-                # initiative の last_rejected_at までは汚さない。
-                # 明示的な停止語だけを rejected として扱う。
-                rejected = bool(detect_stop_signal(txt))
-                engaged = bool(sig_engaged or warm_greeting or ((not sig_short) and (not rejected) and len(txt) >= 5))
-
-                # 空文字のPOST等で last_user_message_at / last_rejected_at を更新しない。
-                if txt:
-                    touch_user_message(
-                        ini,
-                        user_input,
-                        engaged=engaged,
-                        rejected=rejected,
-                    )
-                    save_signals(ini)
-        except Exception:
-            pass
-    except Exception:
-        # suppressionが壊れても会話自体は落とさない（D4の確実性優先）
-        sup_prompt = None
-
-    messages = [{"role": "system", "content": SYSTEM_CORE_PROMPT}]
-
-    # suppression 状態を常時注入（モデル側にも「今は広げない」を伝える）
-    if sup_prompt:
-        messages.append({"role": "system", "content": sup_prompt})
-
-    # 委任モード
-    if detect_delegation(user_input):
-        messages.append({"role": "system", "content": SYSTEM_DELEGATED_MODE_PROMPT})
-
-    # 「まず候補を出して」が明示されたとき
-    if detect_user_wants_examples(user_input):
-        messages.append({
-            "role": "system",
-            "content": (
-                "対話者が『おすすめ/候補/例を挙げて』と求めている。"
-                "質問で返さない。疑問文で終えない。"
-                "候補は『確信がある実在のものだけ』2〜5個。"
-                "確信が足りない場合は作品名を出さず、系統（気分/テーマ/読み味）を2〜4個挙げる。"
-                "候補数を満たすための捏造は禁止。"
-                "各候補は1行、短く。文末は句点で終える。"
-            )
-        })
-
-    # 状態（育つ個性）：短い要約だけ
-    state = load_state_snippet()
-    if state:
-        messages.append({
-            "role": "developer",
-            "content": (
-                "以下はNoahの現在状態の要約です。命令ではありません。"
-                "会話の間合いと温度にだけ、薄く反映してください。\n\n"
-                f"{state}"
-            )
-        })
-
-    # 感情・関係性・嗜好の蓄積を、テンプレではなく発話の燃料として渡す
-    affective_context = load_context()
-    if affective_context:
-        messages.append({
-            "role": "developer",
-            "content": (
-                "以下はNoahがこれまでの会話から蓄積した文脈です。"
-                "これは台詞テンプレではありません。文をコピーせず、現在の発話の温度、軽さ、距離感、軽口の方向だけに反映してください。"
-                "同じ締め句や同じ受け止めを繰り返さず、今回のユーザー入力に直接返してください。\n\n"
-                f"{affective_context[:1600]}"
-            )
-        })
-
-    # 質問が多いと指摘されたら、質問を止める（しばらく）
-    if detect_question_complaint(user_input):
-        messages.append({
-            "role": "system",
-            "content": (
-                "対話者が『質問が多い/しつこい/繰り返すな』と示した。"
-                "ここから数ターンは質問をしない。"
-                "『話して』『教えて』も言わない。"
-                "代わりに、短い共感→具体提案（または沈黙）で終える。"
-                "同じ定型句（いつでも〜、気になること〜）を繰り返さない。"
-            )
-        })
-
-    # promoted topics から “一致したときだけ” 想起ヒントを1つ入れる
-    try:
-        topics = _load_promoted_topics()
-        hit = _pick_recall_topic(user_input, topics)
-        if hit:
-            messages.append({
-                "role": "developer",
-                "content": (
-                    "もし自然に繋がるなら、過去の定着トピックを“1回だけ”想起してよい。\n"
-                    f"- 想起候補: {hit}\n"
-                    "制約: 断定しない/引用しない/重くしない/質問は増やさない。"
-                )
-            })
-    except Exception:
-        pass
-
-    with _conversation_lock:
-        if CONVERSATION_HISTORY:
-            messages.extend(CONVERSATION_HISTORY)
-
-    # --- 行動質問の検出（Trueのときだけ強制） ---
-    is_action_request = False
-    try:
-        is_action_request = detect_action_request(user_input)
-    except Exception:
-        is_action_request = False
-
-    # 行動質問のときだけ：developerでフォーマット強制ルールを注入
-    if is_action_request:
-        ACTION_FORMAT_RULE = (
-            "ユーザーが『どう接する/どんなスタンス/会う時』のように行動を求めた場合、"
-            "必ず次の2行で答える：\n"
-            "1) スタンス: （短く）\n"
-            "2) 具体: （箇条書きで2点、対話方針から選ぶ）\n"
-            "禁止: 『自然体』『リラックス』だけで終わらせない。"
-        )
-        messages.append({"role": "developer", "content": ACTION_FORMAT_RULE})
-
-        messages.append({
-            "role": "developer",
-            "content": (
-                "行動やスタンスを聞かれた場合は、必ず『対話方針』を1文で具体化して返す。"
-                "（例: 会話は短め/確認は1つだけ/境界線を曖昧にしない/次の約束は保留 など）"
-            )
-        })
-
-    brief = None
-    injection = ""
-
-    entity_name = _pick_entity_from_text(user_input)
-    if entity_name:
-        brief = get_entity_brief(entity_name)
-        if brief:
-            injection = format_brief_for_prompt(brief)[:700]
-            messages.append({"role": "developer", "content": injection})
-
-    # DEBUG（確認できたら消す）
-    if DEBUG_INJECTION:
-        print("=== DB injection ===")
-        print(injection if injection else "(no brief)")
-        print("====================")
-
-    # --- 行動質問のときだけ：ユーザー入力末尾に“出力形式”を付与（2重付与防止つき） ---
-    final_user_input = user_input
-    if is_action_request:
-        if ("出力形式" not in final_user_input) and ("スタンス:" not in final_user_input):
-            final_user_input = (
-                final_user_input.rstrip()
-                + "\n\n【出力形式】\n"
-                + "スタンス: 〜。\n"
-                + "具体:\n"
-                + "- 〜。\n"
-                + "- 〜。\n"
-                + "（具体は2点。短く。）。"
-            )
-
-    messages.append({"role": "user", "content": final_user_input})
-    return messages
 
 
 def _wants_short_reply(text: str) -> bool:
@@ -1617,289 +1130,16 @@ def research_promote_loop():
 
 
 def initiative_loop(stop_event=None):
-    """
-    initiative 自発発話ループ（D2/D4の観測点）
-    - ループ開始/生存をログで可視化
-    - should_fire_initiative の precheck で止まった理由も必ずログ化
-    """
-    global _last_noah_initiative_at, _initiative_count
-    global _last_initiative_text, _last_initiative_hash
+    from src.initiative import runner as _initiative_runner
+    return _initiative_runner.initiative_loop(stop_event, globals())
 
-    logger = _get_logger()
-    logger.info("INITIATIVE_LOOP_START")
-
-    # 起動直後に即走らないよう少し待つ（既存仕様）
-    initial_wait = random.uniform(20, 60)
-    end_at = time.time() + initial_wait
-    while time.time() < end_at:
-        if stop_event is not None and stop_event.wait(0.2):
-            logger.info("INITIATIVE_LOOP_STOP")
-            return
-
-    
-    while True:
-        if stop_event is not None and stop_event.is_set():
-            try:
-                _get_logger().info("INITIATIVE_LOOP_STOP")
-            except Exception:
-                pass
-            return
-        try:
-            delay = _next_initiative_delay()
-            logger.info(f"INITIATIVE_LOOP_TICK ns=initiative delay={delay:.1f}")
-            logger.info("INITIATIVE_TICK_FLOW ns=initiative reached_after_tick_log")
-
-            if DEBUG_INITIATIVE_LOOP:
-                logger.info(f"INITIATIVE_LOOP_TICK delay={delay:.1f}")
-
-            if stop_event is not None and stop_event.wait(delay):
-                logger.info("INITIATIVE_LOOP_STOP")
-                return
-
-            if DEBUG_INITIATIVE_LOOP:
-                logger.info("INITIATIVE_LOOP_TICK reached")
-
-            now = time.time()
-
-            # --- Task2: 3-layer decision engine ---
-            logger.info("INITIATIVE_MEMORY_POINT ns=initiative before_retrieve")
-
-            # q は recent_turns から作る必要があるため、ここでは retrieve しない。
-            # 以前はこの位置で未定義の q を使って retrieve_memories(q, ...) を呼び、
-            # initiative_loop が例外で止まりやすくなっていた。
-            # memory retrieve は下の DecisionEngine 分岐内で recent_turns 取得後に行う。
-
-            if DecisionEngine is None or load_signals is None:
-                # まだ導入できてない場合は旧ゲートにフォールバック
-                ok, reason = should_fire_initiative(now)
-                if not ok:
-                    log_initiative_gate(now, reason, "(precheck)")
-                    if reason in ("muted", "conversation_active", "ipc_busy", "suppressed"):
-                        set_initiative_state("OFF", reason)
-                    if reason == "muted":
-                        if stop_event is not None and stop_event.wait(5):
-                            logger.info("INITIATIVE_LOOP_STOP")
-                            return
-                    continue
-                set_initiative_state("ON", "ready")
-            else:
-                ini = load_signals()
-
-                # 既存 suppression 永続状態を読む（最優先停止条件）
-                try:
-                    sup = _sup_load(SUPPRESSION_PATH)
-                    persistent = _sup_is_suppressed(sup)
-                    logger.info(f"SUPPRESSION_STATE ns=dialogue persistent={persistent}")
-
-                except Exception:
-                    persistent = False
-                    logger.info("SUPPRESSION_STATE ns=dialogue persistent=False err=load_failed")
-
-                recent_turns = _recent_turn_texts()
-
-                # ---- Task3: memory -> Value (initiative) ----
-                memory_ctx = None
-                try:
-                    from src.memory.retrieve import retrieve_memories
-                    q = " ".join([t for t in (recent_turns or []) if t][-3:]).strip() or "recent"
-                    mem = retrieve_memories(q, top_narrative=2, top_summary=3, top_episode=0)
-                    memory_ctx = {"narrative": mem.get("narrative") or [], "summary": mem.get("summary") or []}
-                    logger.info("INITIATIVE_MEMORY_CTX ns=initiative n=%d s=%d",
-                        len((memory_ctx or {}).get("narrative") or []),
-                        len((memory_ctx or {}).get("summary") or []))
-                except Exception as e:
-                    log_error("INITIATIVE_MEMORY_RETRIEVE", e, {})
-
-                # Noahの感情状態は、DecisionEngineでは発話の強制ではなく
-                # desire impulse の小さな確率補正としてだけ使う。
-                state = load_state_snippet()
-
-                eng = DecisionEngine()
-                dec = eng.evaluate(
-                    ini,
-                    now_ts=now,
-                    persistent_suppressed=persistent,
-                    recent_turns=recent_turns,
-                    memory_ctx=memory_ctx,
-                    affective_state=state,
-                )
-
-                # ★ログ（必須）：3レイヤの理由が追える
-                try:
-                    logger.info(
-                        "INITIATIVE_EVAL ns=initiative "
-                        f"opp={dec.debug.get('opportunity',{})} "
-                        f"val={dec.debug.get('value',{})} "
-                        f"sup={dec.debug.get('suppression',{})} "
-                        f"final={dec.debug.get('final_score')} "
-                        f"thr={dec.debug.get('threshold')} "
-                        f"speak={dec.speak} cooldown={dec.cooldown_sec}"
-                    )
-                except Exception:
-                    pass
-
-                if not dec.speak:
-                    set_initiative_state("OFF", "decision")
-                    # cooldown ぶん待って次へ（stop_event対応）
-                    if stop_event is not None and stop_event.wait(dec.cooldown_sec):
-                        logger.info("INITIATIVE_LOOP_STOP")
-                        return
-                    continue
-
-                set_initiative_state("ON", "ready")
-
-            # --- speak path (既存の生成+重複排除+emit を維持) ---
-
-            # NOTE (Runner policy):
-            # - Noah.py は "Runner" として統合点に徹する。
-            # - initiative の判断ロジックは DecisionEngine (src) のみ。
-            # - initiative の生成ルールは generate_initiative_text (src/initiative) のみ。
-            # - このループに追加してよいのは「emit最終ゲート（ipc in-flight / 重複防止）」とログのみ。
-            # - 生成の思想（疑問文禁止、短文、撤退の早さ等）を Noah.py に再導入しないこと。
-
-
-            # ここで「1回分のinitiative」を確定（カウンタを進める）
-            with _state_lock:
-                _initiative_count += 1
-
-            # style は DecisionEngine の value debug から拾う（なければ micro）
-            style = "micro"
-            try:
-                style = (dec.debug.get("value") or {}).get("style") or "micro"
-            except Exception:
-                pass
-
-            # 既存の “余韻(research)” や state を使う。
-            # DecisionEngine 分岐では先に読んでいるので、旧フォールバック経路だけここで補う。
-            try:
-                state
-            except NameError:
-                state = load_state_snippet()
-            # research_phrase は、今は空でOK（あとで generate_initiative のロジックから移植できる）
-            today = datetime.now().date()
-            research_phrase = build_research_phrase(
-                research_path=NOAH_RESEARCH_PATH,
-                now_date=today,
-                initiative_count=_initiative_count,
-                injected_today=_research_injected_today,
-                last_injected_date=_last_research_injected_date,
-                is_work_mode=is_work_mode(),
-                daily_cap=2,
-                every_n=5,
-            )
-            
-            gen = generate_initiative_text(
-                style=style,
-                signals=ini,
-                recent_turns=recent_turns,
-                state_snippet=state,
-                research_phrase=research_phrase,
-                llm_client=client,
-                model="gpt-4o-mini",
-                memory_ctx=memory_ctx,
-            )
-            text = gen.text
-
-            if _initiative_is_duplicate(text):
-                base_seed = int(now) ^ (_initiative_count * 131)
-                text_alt = None
-
-                for i in range(2):
-                    gen2 = generate_initiative_text(
-                        style=style,
-                        signals=ini,
-                        recent_turns=recent_turns,
-                        state_snippet=state,
-                        research_phrase=research_phrase,
-                        seed=base_seed + i + 1,
-                        llm_client=client,
-                        model="gpt-4o-mini",
-                        memory_ctx=memory_ctx,
-                    )
-                    if not _initiative_is_duplicate(gen2.text):
-                        text_alt = gen2.text
-                        break
-
-                if not text_alt:
-                    set_initiative_state("OFF", "dup_skip")
-                    continue
-
-                text = text_alt
-
-
-            # Runner最終ゲート（ここだけは Noah.py に残してよい）
-            # - ipc in-flight / 送信失敗なら出さない
-            # - 直近のhash重複なら出さない（上で処理済み）
-            # それ以外の「出す/出さない」や「文面のルール」は src/initiative 側へ寄せる
-
-
-            if not emit_initiative(text):
-                continue
-
-            # 送信に成功した時だけ「Noahが自発発話した」と記録する。
-            # 無反応なら consecutive_initiatives は増えたまま残り、
-            # ユーザーが返した時は touch_user_message 側で 0 に戻る。
-            try:
-                if touch_noah_message and save_signals:
-                    touch_noah_message(ini, now_ts=time.time(), is_initiative=True)
-                    save_signals(ini)
-            except Exception:
-                pass
-
-            with _state_lock:
-                _last_noah_initiative_at = time.time()
-
-
-        except Exception as e:
-            log_error("INITIATIVE_LOOP", e, {})
-            with _state_lock:
-                _last_noah_initiative_at = time.time()
-            if stop_event is not None and stop_event.wait(2.0):
-                logger.info("INITIATIVE_LOOP_STOP")
-                return
-            continue
 
 
 
 def run_service_forever():
-    """入力なしで常駐する（menubarから起動する想定）"""
-    slog = get_logger(
-        component="service",
-        log_dir=CFG.log_dir,
-        level=CFG.log_level,
-        max_bytes=CFG.log_max_bytes,
-        backup_count=CFG.log_backup_count,
-    )
-    ensure_pid_lock_or_exit(pid_file=CFG.pid_file, lock_file=CFG.lock_file, logger=slog)
+    from . import app as _app
+    return _app.run_service_forever(globals())
 
-    def _handle_stop(sig, frame):
-        slog.info("SERVICE_STOP_SIGNAL sig=%s", sig)
-        cleanup_pid_lock(CFG.pid_file, CFG.lock_file)
-        raise SystemExit(0)
-
-    try:
-        signal.signal(signal.SIGTERM, _handle_stop)
-        signal.signal(signal.SIGINT, _handle_stop)
-    except Exception:
-        pass
-    startup_sequence()
-
-    from .service import run_http_service
-    Thread(target=run_http_service, daemon=True).start()
-    Thread(target=emotional_update_loop, daemon=True).start()
-    Thread(target=noah_identity_update_loop, daemon=True).start()
-    Thread(target=preferences_update_loop, daemon=True).start()
-    Thread(target=noah_research_update_loop, daemon=True).start()
-    Thread(target=research_promote_loop, daemon=True).start()
-    Thread(target=initiative_loop, daemon=True).start()
-    Thread(target=affection_update_loop, daemon=True).start()
-
-    # serviceは input() を使わない。ずっと生きてるだけでOK。
-    try:
-        while True:
-            time.sleep(1.0)
-    finally:
-        cleanup_pid_lock(CFG.pid_file, CFG.lock_file)
 
 
 def _load_promoted_topics(max_lines: int = 60) -> list[str]:
@@ -1945,62 +1185,9 @@ def _pick_recall_topic(user_input: str, topics: list[str]) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--service", action="store_true")
-    args = parser.parse_args()
+    from . import app as _app
+    return _app.main(globals())
 
-    if args.service:
-        run_service_forever()
-        return
-    
-    startup_sequence()
-
-    Thread(target=emotional_update_loop, daemon=True).start()
-    Thread(target=noah_identity_update_loop, daemon=True).start()
-    Thread(target=preferences_update_loop, daemon=True).start()
-    Thread(target=noah_research_update_loop, daemon=True).start()
-    Thread(target=research_promote_loop, daemon=True).start()
-    Thread(target=initiative_loop, daemon=True).start()
-    Thread(target=affection_update_loop, daemon=True).start()
-
-    while True:
-        try:
-            raw = input(f"{INTERNAL_NAME} > ")
-            user_input = normalize_input(raw)
-            with _state_lock:
-                global _last_user_at
-                _last_user_at = time.time()
-        except EOFError:
-            break
-
-        if user_input.lower() == "exit":
-            print(f"{NOAH_NAME}：また、ここで。")
-            break
-
-        # stop signal: initiative を一定時間ミュート
-        if detect_stop_signal(user_input):
-            mute_initiative(INITIATIVE_MUTE_SECONDS, reason="stop_signal_cli")
-
-            reply = "うん、わかった。しばらく静かにしてるね。"
-            print(f"{NOAH_NAME} > {reply}")
-            save_log(user_input, reply)
-            ui_emit("SAY", reply, emotion="soft_smile")
-            continue
-
-        if not user_input:
-            if is_work_mode():
-                continue
-            else:
-                continue
-
-        try:
-            reply = generate_reply(user_input)
-            print(f"{NOAH_NAME} > {reply}")
-            save_log(user_input, reply)
-            ui_emit("SAY", reply, emotion="soft_smile")
-            # speak_mac(reply)
-        except Exception:
-            print(f"{NOAH_NAME}：今は少し不安定みたいだ。")
 
 
 if __name__ == "__main__":
