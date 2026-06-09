@@ -744,15 +744,23 @@ def allow_and_register_initiative(text: str) -> tuple[bool, str]:
 
 def emit_initiative(text: str) -> bool:
     logger = _get_logger()
-    logger.info(f"EMIT_TRY now={time.time():.3f} text_hash={_hash_short(text)}")
+    text_hash = _hash_short(text)
+    logger.info(f"EMIT_TRY now={time.time():.3f} text_hash={text_hash}")
 
     ok, reason = allow_and_register_initiative(text)
     if not ok:
+        logger.info(f"INITIATIVE_EMIT_SKIP reason={reason} text_hash={text_hash}")
         set_initiative_state("OFF", reason)
         return False
 
     save_log("(initiative)", text)
+    logger.info(f"INITIATIVE_EMIT_SAVE_LOG_DONE text_hash={text_hash}")
+
     ui_emit("SAY", text, emotion="idle")
+    logger.info("INITIATIVE_EMIT_TEXT text=%r", text)
+    print(f"[Initiative] {text}", flush=True)
+
+    logger.info(f"INITIATIVE_EMIT_DONE text_hash={text_hash}")
     return True
 
 
@@ -976,24 +984,36 @@ def build_messages(user_input: str):
                 except Exception:
                     pass
 
-                # suppressionのsignalsから engaged/rejected を雑に推定
-                # （正確さより“抑制側に倒す”が大事）
+                # suppressionのsignalsから engaged/rejected を推定する。
+                # 重要: 「こんばんは」などの短い挨拶を rejected 扱いにしない。
+                # rejected は「明示的に静かにしてほしい/空入力」寄りに限定する。
+                # 短い相槌は persistent suppression 側で短時間だけ控えるが、
+                # last_rejected_at までは汚さない（30分以上黙り込む原因になるため）。
                 txt = (user_input or "").strip()
-                is_short = len(txt) <= 6
-                # _sup_detect の戻りが dict でも obj でも拾えるようにする
                 sig_short = bool(getattr(signals, "short", False)) or bool(getattr(signals, "is_short", False)) or bool((signals.get("short") if isinstance(signals, dict) else False))
                 sig_silent = bool(getattr(signals, "silent", False)) or bool((signals.get("silent") if isinstance(signals, dict) else False))
+                sig_engaged = bool(getattr(signals, "engaged", False)) or bool((signals.get("engaged") if isinstance(signals, dict) else False))
 
-                rejected = bool(sig_short or sig_silent or is_short)
-                engaged = bool((not rejected) and ("?" in txt or "？" in txt or len(txt) >= 30))
+                warm_greeting = txt in {
+                    "おはよう", "おはよ", "こんにちは", "こんばんは", "やあ", "やっほー", "やっほ", "ただいま",
+                    "hi", "hello", "hey", "Hi", "Hello", "Hey",
+                }
 
-                touch_user_message(
-                    ini,
-                    user_input,
-                    engaged=engaged,
-                    rejected=rejected,
-                )
-                save_signals(ini)
+                # silent/short は「会話を広げない」材料にはするが、
+                # initiative の last_rejected_at までは汚さない。
+                # 明示的な停止語だけを rejected として扱う。
+                rejected = bool(detect_stop_signal(txt))
+                engaged = bool(sig_engaged or warm_greeting or ((not sig_short) and (not rejected) and len(txt) >= 5))
+
+                # 空文字のPOST等で last_user_message_at / last_rejected_at を更新しない。
+                if txt:
+                    touch_user_message(
+                        ini,
+                        user_input,
+                        engaged=engaged,
+                        rejected=rejected,
+                    )
+                    save_signals(ini)
         except Exception:
             pass
     except Exception:

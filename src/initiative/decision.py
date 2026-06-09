@@ -30,7 +30,7 @@ class Decision:
 @dataclass
 class DecisionConfig:
     # mode別の閾値（workは不利）
-    threshold_normal: float = 0.20
+    threshold_normal: float = 0.16
     threshold_work: float = 0.60
 
     # cooldown（最短）
@@ -47,14 +47,14 @@ class DecisionConfig:
 
     # affection impulse: 閾値未満でも、関係性と沈黙が揃った時だけ低確率で声をかける
     affection_impulse_enabled: bool = True
-    affection_impulse_base: float = 0.03
+    affection_impulse_base: float = 0.05
     affection_bonus_threshold: float = 0.45
     affection_bonus: float = 0.06
     trust_bonus_threshold: float = 0.40
     trust_bonus: float = 0.03
     loneliness_bonus_threshold: float = 0.30
     loneliness_bonus: float = 0.04
-    long_silence_bonus_sec: int = 60 * 60
+    long_silence_bonus_sec: int = 20 * 60
     long_silence_bonus: float = 0.06
     very_long_silence_bonus_sec: int = 3 * 60 * 60
     very_long_silence_bonus: float = 0.04
@@ -183,6 +183,14 @@ class DecisionEngine:
             debug=debug,
         )
 
+    def _recent_rejection_active(self, signals: InitiativeSignals, *, now: float) -> bool:
+        """直近拒否が、直近のengagedで上書きされていない場合だけ有効にする。"""
+        if not signals.last_rejected_at:
+            return False
+        if signals.last_engaged_at and signals.last_engaged_at >= signals.last_rejected_at:
+            return False
+        return (now - signals.last_rejected_at) <= self.cfg.rejected_recent_window_sec
+
     def _cooldown_for_speak(self, signals: InitiativeSignals, *, sup_strength: float, now: float) -> int:
         base = self.cfg.cooldown_speak_work_sec if signals.mode == "work" else self.cfg.cooldown_speak_normal_sec
 
@@ -191,7 +199,7 @@ class DecisionEngine:
         cd = base + boost
 
         # 直近拒否があるならさらに長く（ただし speak 後の話なので軽めに効かせたいなら後で調整）
-        if signals.last_rejected_at and (now - signals.last_rejected_at) <= self.cfg.rejected_recent_window_sec:
+        if self._recent_rejection_active(signals, now=now):
             cd += int(self.cfg.rejected_extra_cooldown_sec * 0.5)
 
         return max(60, cd)
@@ -203,7 +211,7 @@ class DecisionEngine:
         cd += int(self.cfg.suppression_cooldown_boost_max * _clamp01(sup_strength))
 
         # 最近拒否があるなら強めに伸ばす（安全側）
-        if signals.last_rejected_at and (now - signals.last_rejected_at) <= self.cfg.rejected_recent_window_sec:
+        if self._recent_rejection_active(signals, now=now):
             cd += self.cfg.rejected_extra_cooldown_sec
 
         return max(60, cd)
@@ -237,7 +245,7 @@ class DecisionEngine:
         if signals.last_user_message_at and now - signals.last_user_message_at < 90:
             return 0.0
 
-        if signals.last_rejected_at and now - signals.last_rejected_at < self.cfg.rejected_recent_window_sec:
+        if self._recent_rejection_active(signals, now=now):
             return 0.0
 
         c = int(getattr(signals, "consecutive_initiatives", 0) or 0)

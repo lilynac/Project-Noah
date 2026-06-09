@@ -277,6 +277,10 @@ def touch_user_message(
     # 明示フラグがあればそれを優先
     if engaged is True:
         signals.last_engaged_at = now_ts
+        # ユーザーが戻ってきて普通に反応したなら、過去の「拒否っぽさ」は解消する。
+        # これをしないと、挨拶や短い返事の後も initiative 側で recent_rejected が残り続ける。
+        if rejected is not True and signals.last_rejected_at and signals.last_rejected_at <= now_ts:
+            signals.last_rejected_at = 0.0
     if rejected is True:
         signals.last_rejected_at = now_ts
 

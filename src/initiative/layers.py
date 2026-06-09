@@ -43,6 +43,11 @@ class OpportunityConfig:
     # 会話が動いてる間は割り込まない：ユーザー発話直後のブロック
     conversation_block_sec: int = 90  # 90秒
 
+    # 「短い会話のあと、少し間が空いた」状態。
+    # ここを作らないと、挨拶後は20分以上ほぼ自発しない設計になってしまう。
+    brief_pause_sec: int = 3 * 60      # 3分
+    brief_pause_bonus: float = 0.25
+
     # 「間が空いた」加点の閾値（段階）
     silence_tier1_sec: int = 20 * 60   # 20分
     silence_tier2_sec: int = 60 * 60   # 60分
@@ -100,6 +105,9 @@ class OpportunityLayer:
                 elif dt_user >= self.cfg.silence_tier1_sec:
                     score += 0.35
                     reasons.append(f"silence_gap_t1:{int(dt_user)}s")
+                elif dt_user >= self.cfg.brief_pause_sec:
+                    score += self.cfg.brief_pause_bonus
+                    reasons.append(f"brief_pause:{int(dt_user)}s:+{self.cfg.brief_pause_bonus}")
                 else:
                     reasons.append(f"silence_gap_small:{int(dt_user)}s")
         else:
@@ -195,7 +203,12 @@ class SuppressionLayer:
             reasons.append(f"mode_work:{self.cfg.work_base_strength}")
 
         # 2) 直近で拒否/無視っぽい反応があったら強く抑制
-        if signals.last_rejected_at and signals.last_rejected_at > 0:
+        reject_active = bool(
+            signals.last_rejected_at
+            and signals.last_rejected_at > 0
+            and not (signals.last_engaged_at and signals.last_engaged_at >= signals.last_rejected_at)
+        )
+        if reject_active:
             dt = now - signals.last_rejected_at
             if dt < 0:
                 dt = 0
@@ -308,16 +321,22 @@ class ValueLayer:
             style = "care"
 
         # 3) engaged が最近なら少し加点
+        # 挨拶や普通の会話のあとにNoahが完全待機にならないよう、やや強めにする。
         if signals.last_engaged_at and signals.last_engaged_at > 0:
             dt = now - signals.last_engaged_at
             if dt < 0:
                 dt = 0
             if dt <= self.cfg.engaged_window_sec:
-                score += 0.10
-                reasons.append(f"recent_engaged:{int(dt)}s:+0.10")
+                score += 0.20
+                reasons.append(f"recent_engaged:{int(dt)}s:+0.20")
 
         # 4) rejected が最近なら価値を下げる（歓迎されない可能性）
-        if signals.last_rejected_at and signals.last_rejected_at > 0:
+        reject_active = bool(
+            signals.last_rejected_at
+            and signals.last_rejected_at > 0
+            and not (signals.last_engaged_at and signals.last_engaged_at >= signals.last_rejected_at)
+        )
+        if reject_active:
             dt = now - signals.last_rejected_at
             if dt < 0:
                 dt = 0
