@@ -22,7 +22,6 @@ logs/
 *.log
 
 config.txt
-config.txt
 
 # Ignore generated/backup assets
 /src/__backup/

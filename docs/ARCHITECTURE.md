@@ -71,8 +71,7 @@ src/
 ├── llm_trace.py
 ├── memory/
 ├── initiative/
-├── dialogue/
-└── legacy/
+└── dialogue/
 ```
 
 ---

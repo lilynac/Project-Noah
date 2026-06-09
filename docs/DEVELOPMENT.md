@@ -135,6 +135,8 @@ git diff --staged
 
 ```bash
 git status
+```
+```bash
 git diff
 ```
 
