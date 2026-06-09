@@ -165,7 +165,7 @@ git status
 ### 3. コミットする
 
 ```bash
-git commit -m "docs: reorganize project documentation"
+git commit -m ""
 ```
 
 コミットメッセージは、あとで見返して内容が分かる名前にします。
