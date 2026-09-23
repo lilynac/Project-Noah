@@ -133,3 +133,53 @@ def test_destroying_transcript_cancels_pending_scroll(app):
     sip.delete(transcript)
     # A queued callback must not touch the deleted scrollbar.
     app.processEvents()
+
+
+def test_boot_card_animates_and_can_be_skipped(app):
+    from src.startup_display import WakeSequence
+    window = ChatWindow(lambda text: '返事')
+    sequence = WakeSequence('calm', 'Noah が目を覚ます。', ('ひと息。',), ('ここにいるよ。', '話そう。'))
+    window.start_boot(sequence, interval_ms=5)
+    assert not window.boot_card.isHidden()
+    wait_until(app, lambda: not window._boot_timer.isActive())
+    assert window.boot_label.text() == '話そう。'
+    window.finish_boot()
+    assert window.boot_card.isHidden()
+    window.start_boot(sequence)
+    window.message_input.setText('こんにちは')
+    window.send()
+    assert window.boot_card.isHidden()
+    assert not window._boot_timer.isActive()
+    wait_until(app, lambda: not window._pending)
+
+
+def test_history_search_wraps_and_preserves_draft(app):
+    archive = ['昨日は散歩した。\n今日は読書した。']
+    window = ChatWindow(lambda text: '', archive_loader=lambda: archive[0])
+    window.message_input.setText('下書き')
+    window.open_history()
+    dialog = window._history_dialog
+    dialog.search.setText('散歩')
+    dialog.find_next()
+    assert dialog.text.textCursor().selectedText() == '散歩'
+    dialog.find_next()
+    assert dialog.text.textCursor().selectedText() == '散歩'
+    dialog.search.setText('見つからない')
+    dialog.find_next()
+    assert '見つかりません' in dialog.notice.text()
+    dialog.close()
+    archive[0] += '\n新しい会話'
+    window.open_history()
+    assert '新しい会話' in window._history_dialog.text.toPlainText()
+    assert window.message_input.text() == '下書き'
+    window._history_dialog.close()
+
+
+def test_history_read_error_is_visible(app):
+    from src.history_view import HistoryDialog
+    def fail():
+        raise OSError('unavailable')
+    dialog = HistoryDialog(fail)
+    assert '読み込めません' in dialog.notice.text()
+    assert dialog.text.isReadOnly()
+    dialog.close()

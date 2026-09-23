@@ -2,6 +2,8 @@
 from threading import Thread
 from typing import Callable
 
+from .history_view import HistoryDialog
+
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
@@ -91,6 +93,7 @@ QFrame#composer { background: #ffffff; border: 1px solid #d5ded5; border-radius:
 QLineEdit { border: none; background: transparent; padding: 12px 6px; selection-background-color: #d1e5d8; }
 QLineEdit:focus { background: #f3f8f4; border-radius: 8px; }
 QPushButton { background: #285b43; color: #ffffff; border: none; border-radius: 11px; padding: 11px 18px; font-weight: 600; }
+QPushButton#historyButton { background: #e4eee6; color: #356b52; padding: 7px 12px; font-size: 12px; }
 QPushButton:hover { background: #367457; }
 QPushButton:pressed { background: #1b422f; }
 QPushButton:disabled { background: #e8eee9; color: #89998c; }
@@ -106,9 +109,14 @@ class ReplySignals(QObject):
 
 
 class ChatWindow(QWidget):
-    def __init__(self, send_message: Callable[[str], str], history=()):
+    def __init__(self, send_message: Callable[[str], str], history=(), archive_loader=None):
         super().__init__()
         self._send_message = send_message
+        self._archive_loader = archive_loader
+        self._history_dialog = None
+        self._boot_lines = []
+        self._boot_timer = QTimer(self)
+        self._boot_timer.timeout.connect(self._advance_boot)
         self._pending = False
         self._sent_text = ""
         self._signals = ReplySignals(self)
@@ -142,6 +150,25 @@ class ChatWindow(QWidget):
         self.presence.setObjectName("presence")
         header.addWidget(self.presence, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(header)
+        toolbar = QHBoxLayout()
+        toolbar.addStretch()
+        self.history_button = QPushButton("過去の会話")
+        self.history_button.setObjectName("historyButton")
+        self.history_button.clicked.connect(self.open_history)
+        toolbar.addWidget(self.history_button)
+        layout.addLayout(toolbar)
+        self.boot_card = QFrame()
+        self.boot_card.setObjectName("noahBubble")
+        boot_layout = QVBoxLayout(self.boot_card)
+        self.boot_label = QLabel()
+        self.boot_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.boot_label.setWordWrap(True)
+        boot_layout.addWidget(self.boot_label)
+        self.skip_boot = QPushButton("会話をはじめる")
+        self.skip_boot.clicked.connect(self.finish_boot)
+        boot_layout.addWidget(self.skip_boot, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self.boot_card)
+        self.boot_card.hide()
         self.transcript = ConversationView()
         layout.addWidget(self.transcript, 1)
         self.status = QLabel("ここにいるよ。何を話そうか。")
@@ -173,6 +200,33 @@ class ChatWindow(QWidget):
                 self._append("あなた" if item["role"] == "user" else "Noah", item["content"])
         self._update_send_button()
 
+    def start_boot(self, sequence, interval_ms=550):
+        self.skip_boot.setText("会話をはじめる")
+        self._boot_lines = list(sequence.steps) + list(sequence.ready)
+        self.boot_label.setText(sequence.opening)
+        self.boot_card.show()
+        self._boot_timer.start(interval_ms)
+
+    def _advance_boot(self):
+        if self._boot_lines:
+            self.boot_label.setText(self._boot_lines.pop(0))
+        else:
+            self._boot_timer.stop()
+            self.skip_boot.setText("閉じる")
+
+    def finish_boot(self):
+        self._boot_timer.stop()
+        self._boot_lines.clear()
+        self.boot_card.hide()
+
+    def open_history(self):
+        if self._history_dialog is not None:
+            self._history_dialog.close()
+            self._history_dialog.deleteLater()
+        loader = self._archive_loader or self.transcript.toPlainText
+        self._history_dialog = HistoryDialog(loader, self)
+        self._history_dialog.show()
+
     def _append(self, speaker: str, text: str):
         self.transcript.append_message(speaker, text)
 
@@ -195,6 +249,7 @@ class ChatWindow(QWidget):
             return
         self._pending = True
         self._sent_text = text
+        self.finish_boot()
         self.message_input.clear()
         self._update_send_button()
         self._append("あなた", text)
