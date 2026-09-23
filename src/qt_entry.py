@@ -185,9 +185,9 @@ def main():
 
     tray.show()
     debug("[qt_entry] tray.show() called")
-    chat.show_chat()
     if os.getenv("NOAH_BOOT_STYLE", "poetic").lower() != "plain":
         chat.start_boot(wake_sequence)
+    chat.show_chat()
 
     # ★保険：Qtイベントループが落ちないよう、何もしないタイマーを回す
     keepalive = QTimer()

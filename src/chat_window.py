@@ -115,6 +115,7 @@ class ChatWindow(QWidget):
         self._archive_loader = archive_loader
         self._history_dialog = None
         self._boot_lines = []
+        self._booting = False
         self._boot_timer = QTimer(self)
         self._boot_timer.timeout.connect(self._advance_boot)
         self._pending = False
@@ -164,9 +165,7 @@ class ChatWindow(QWidget):
         self.boot_label.setTextFormat(Qt.TextFormat.PlainText)
         self.boot_label.setWordWrap(True)
         boot_layout.addWidget(self.boot_label)
-        self.skip_boot = QPushButton("会話をはじめる")
-        self.skip_boot.clicked.connect(self.finish_boot)
-        boot_layout.addWidget(self.skip_boot, 0, Qt.AlignmentFlag.AlignRight)
+        self.boot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.boot_card)
         self.boot_card.hide()
         self.transcript = ConversationView()
@@ -195,13 +194,20 @@ class ChatWindow(QWidget):
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        self._chat_widgets = (self.history_button, self.transcript, self.status, composer, hint)
         for item in history:
             if item.get("role") in ("user", "assistant") and isinstance(item.get("content"), str):
                 self._append("あなた" if item["role"] == "user" else "Noah", item["content"])
         self._update_send_button()
 
     def start_boot(self, sequence, interval_ms=550):
-        self.skip_boot.setText("会話をはじめる")
+        self._booting = True
+        self.presence.setText("目覚めています")
+        for widget in self._chat_widgets:
+            widget.hide()
+        if self._history_dialog is not None:
+            self._history_dialog.close()
+        self.layout().setStretchFactor(self.boot_card, 1)
         self._boot_lines = list(sequence.steps) + list(sequence.ready)
         self.boot_label.setText(sequence.opening)
         self.boot_card.show()
@@ -211,15 +217,23 @@ class ChatWindow(QWidget):
         if self._boot_lines:
             self.boot_label.setText(self._boot_lines.pop(0))
         else:
-            self._boot_timer.stop()
-            self.skip_boot.setText("閉じる")
+            self.finish_boot()
 
     def finish_boot(self):
         self._boot_timer.stop()
         self._boot_lines.clear()
         self.boot_card.hide()
+        self._booting = False
+        self.layout().setStretchFactor(self.boot_card, 0)
+        for widget in self._chat_widgets:
+            widget.show()
+        self.presence.setText("待機中")
+        self.message_input.setFocus()
+        self.transcript._scroll_timer.start(0)
 
     def open_history(self):
+        if self._booting:
+            return
         if self._history_dialog is not None:
             self._history_dialog.close()
             self._history_dialog.deleteLater()
@@ -245,11 +259,10 @@ class ChatWindow(QWidget):
 
     def send(self):
         text = self.message_input.text().strip()
-        if self._pending or not text:
+        if self._booting or self._pending or not text:
             return
         self._pending = True
         self._sent_text = text
-        self.finish_boot()
         self.message_input.clear()
         self._update_send_button()
         self._append("あなた", text)

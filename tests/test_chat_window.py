@@ -135,22 +135,30 @@ def test_destroying_transcript_cancels_pending_scroll(app):
     app.processEvents()
 
 
-def test_boot_card_animates_and_can_be_skipped(app):
+def test_boot_finishes_before_chat_is_available(app):
     from src.startup_display import WakeSequence
-    window = ChatWindow(lambda text: '返事')
+    calls = []
+    window = ChatWindow(lambda text: calls.append(text) or '返事',
+                        [{'role': 'assistant', 'content': '以前の会話'}])
     sequence = WakeSequence('calm', 'Noah が目を覚ます。', ('ひと息。',), ('ここにいるよ。', '話そう。'))
     window.start_boot(sequence, interval_ms=5)
     assert not window.boot_card.isHidden()
-    wait_until(app, lambda: not window._boot_timer.isActive())
-    assert window.boot_label.text() == '話そう。'
-    window.finish_boot()
-    assert window.boot_card.isHidden()
-    window.start_boot(sequence)
+    assert all(widget.isHidden() for widget in window._chat_widgets)
     window.message_input.setText('こんにちは')
     window.send()
+    window.open_history()
+    assert not calls
+    assert window._history_dialog is None
+    wait_until(app, lambda: not window._boot_timer.isActive())
+    assert window.boot_label.text() == '話そう。'
     assert window.boot_card.isHidden()
-    assert not window._boot_timer.isActive()
+    assert all(not widget.isHidden() for widget in window._chat_widgets)
+    assert '以前の会話' in window.transcript.toPlainText()
+    assert window.message_input.text() == 'こんにちは'
+    window.send()
     wait_until(app, lambda: not window._pending)
+    assert calls == ['こんにちは']
+    window.hide()
 
 
 def test_history_search_wraps_and_preserves_draft(app):
