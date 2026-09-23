@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QApplication, QStyle, QSystemTrayIcon, QMessageBox
 from datetime import datetime
 
 from .tray import TrayController, TrayDeps
+from .chat_window import ChatWindow
 from .service import run_http_service
 from .desktop_noah import create_overlay
 from .paths import MODE_PATH
@@ -87,41 +88,11 @@ def main():
     debug("[qt_entry] initiative loop thread started")
     next_wake_step("内側の気配が、ゆっくり動き始めました。")
 
-    # ---- Tray deps ----
-    def send_user_utterance(text: str):
-        # UIを固めない：通信は別スレッドで実行する
-        def worker():
-            try:
-                reply = _post_chat(text, timeout=60.0)
-                print(f"[Reply] {reply}")
-
-                # 返信をOverlayにも出す（ログだけでも可だが、見える方が安心）
-                try:
-                    from . import Noah as noah
-                    noah.ui_emit("SAY", reply, emotion="idle")
-                except Exception:
-                    pass
-
-            except urllib.error.HTTPError as e:
-                body = e.read().decode("utf-8", errors="replace")
-                print(f"[ERROR] HTTP {e.code}: {body}")
-                try:
-                    from . import Noah as noah
-                    noah.ui_emit("SAY", "送信に失敗した。", emotion="idle")
-                except Exception:
-                    pass
-
-            except Exception as e:
-                print(f"[ERROR] {repr(e)}")
-                try:
-                    from . import Noah as noah
-                    noah.ui_emit("SAY", "送信に失敗した。", emotion="idle")
-                except Exception:
-                    pass
-
-        Thread(target=worker, daemon=True).start()
-
-
+    # Restore the existing conversation before presenting the chat window.
+    noah.load_conversation_history()
+    with noah._conversation_lock:
+        history = list(noah.CONVERSATION_HISTORY)
+    chat = ChatWindow(lambda text: _post_chat(text, timeout=60.0), history)
 
     def set_mode(mode: str):
         p = Path(MODE_PATH)
@@ -197,6 +168,9 @@ def main():
             except Exception:
                 pass
 
+        stop_event.set()
+        server_thread.join(timeout=2.0)
+        noah_thread.join(timeout=5.0)
         app.quit()
         return
 
@@ -208,7 +182,7 @@ def main():
 
     deps = TrayDeps(
         icon=icon,
-        send_user_utterance=send_user_utterance,
+        open_chat=chat.show_chat,
         set_mode=set_mode,
         quit_app=quit_app,
     )
@@ -220,6 +194,8 @@ def main():
     for extra in steps:
         wake_step(extra, 0.18)
     wake_ready(wake_sequence)
+    chat.show_chat()
+    print("会話ウィンドウに入力して Enter で送信できます。")
 
     # ★保険：Qtイベントループが落ちないよう、何もしないタイマーを回す
     keepalive = QTimer()
