@@ -19,7 +19,7 @@ def test_turn_survives_restart_and_preserves_shared_list(store):
     reference = history.CONVERSATION_HISTORY
     history.record_conversation_turn('  やあ  ', 'こんにちは')
     expected = [{'role': 'user', 'content': 'やあ'}, {'role': 'assistant', 'content': 'こんにちは'}]
-    assert json.loads(store.read_text()) == expected
+    assert json.loads(store.read_text(encoding="utf-8")) == expected
     reference.clear()
     history.load_conversation_history()
     assert reference == expected
@@ -30,13 +30,13 @@ def test_history_retains_complete_recent_turns(store):
     for i in range(5):
         history.record_conversation_turn(str(i), f'reply-{i}')
     assert [m['content'] for m in history.CONVERSATION_HISTORY[::2]] == ['2', '3', '4']
-    assert json.loads(store.read_text()) == history.CONVERSATION_HISTORY
+    assert json.loads(store.read_text(encoding="utf-8")) == history.CONVERSATION_HISTORY
 
 
 def test_parallel_saves_keep_complete_turns(store):
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda i: history.record_conversation_turn(str(i), f'reply-{i}'), range(30)))
-    saved = json.loads(store.read_text())
+    saved = json.loads(store.read_text(encoding="utf-8"))
     assert saved == history.CONVERSATION_HISTORY
     assert len(saved) == 6
     for i in range(0, len(saved), 2):
@@ -45,10 +45,10 @@ def test_parallel_saves_keep_complete_turns(store):
 
 def test_save_failure_keeps_memory_and_previous_file(store, monkeypatch):
     history.record_conversation_turn('first', 'reply')
-    previous = store.read_text()
+    previous = store.read_text(encoding="utf-8")
     monkeypatch.setattr(history.os, 'replace', Mock(side_effect=OSError('disk error')))
     history.record_conversation_turn('second', 'reply2')
-    assert store.read_text() == previous
+    assert store.read_text(encoding="utf-8") == previous
     assert history.CONVERSATION_HISTORY[-1]['content'] == 'reply2'
     history._error_logger.assert_called_once()
 
