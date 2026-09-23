@@ -1,14 +1,14 @@
 # Conversation history storage split from Noah.py.
 import json
 import os
-from threading import Lock
+from threading import Lock, RLock
 
 MEMORY_DIR = None
 CONVERSATION_HISTORY = []
 CONVERSATION_MAX_TURNS = 30
 CONVERSATION_PERSIST_FILENAME = "conversation_history.json"
 _conversation_lock = Lock()
-_persist_lock = Lock()
+_persist_lock = RLock()
 _error_logger = None
 
 def configure_conversation_history(*, memory_dir=None, error_logger=None, max_turns=None):
@@ -82,14 +82,13 @@ def persist_conversation_history() -> None:
     path = _conversation_persist_path()
     try:
         import json
-        with _conversation_lock:
-            payload = list(CONVERSATION_HISTORY)
-
-        tmp = path + ".tmp"
         with _persist_lock:
+            with _conversation_lock:
+                payload = list(CONVERSATION_HISTORY)
+            tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
-            os.replace(tmp, path)  # atomic-ish
+            os.replace(tmp, path)
     except Exception as e:
         log_error("D3_SAVE_HISTORY", e, {"path": path})
 
@@ -114,3 +113,20 @@ def _recent_turn_texts(max_items: int = 6):
             break
     return list(reversed(out))
 
+
+
+def record_conversation_turn(user_text: str, reply: str) -> None:
+    """Record a complete turn, retaining the most recent configured turns."""
+    if not isinstance(user_text, str) or not isinstance(reply, str):
+        return
+    if not user_text.strip() or not reply.strip():
+        return
+    # Serialize updates with persistence so an older snapshot cannot win.
+    with _persist_lock:
+        with _conversation_lock:
+            CONVERSATION_HISTORY.extend([
+                {"role": "user", "content": user_text.strip()},
+                {"role": "assistant", "content": reply.strip()},
+            ])
+            CONVERSATION_HISTORY[:] = _sanitize_history(CONVERSATION_HISTORY)
+        persist_conversation_history()

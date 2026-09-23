@@ -122,6 +122,7 @@ from .conversation_history import (
     _conversation_lock,
     load_conversation_history,
     persist_conversation_history,
+    record_conversation_turn,
     _recent_turn_texts,
 )
 
@@ -834,7 +835,8 @@ def generate_reply(user_input: str) -> str:
         except Exception:
             reply = ""
 
-    if not reply:
+    has_generated_reply = bool(reply.strip())
+    if not has_generated_reply:
         reply = "……うまく言葉が出てこない。言葉が増えるまで、ここで受け止める。"
 
     reply = sanitize_reply_style(user_input, reply)
@@ -887,7 +889,8 @@ def generate_reply(user_input: str) -> str:
     # LLMが、蓄積された状態・記憶・直近文脈をもとに生成した言葉をそのまま返す。
     # ここで固定フレーズを足すとロボット感が出るため、後段合成は禁止。
 
-    # （以下、履歴保存など既存処理…）
+    if has_generated_reply:
+        record_conversation_turn(user_input, reply)
     return reply
 
 

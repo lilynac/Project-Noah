@@ -75,6 +75,13 @@ def main():
 
     debug("[qt_entry] starting…")
 
+    from . import Noah as noah
+    # Restore the existing conversation before presenting the chat window.
+    noah.load_conversation_history()
+    with noah._conversation_lock:
+        history = list(noah.CONVERSATION_HISTORY)
+    chat = ChatWindow(lambda text: _post_chat(text, timeout=60.0), history)
+
     # ---- IPC サービス起動（/chat, /health）----
     server_thread = Thread(target=run_http_service, args=("127.0.0.1", 8765, stop_event))
     server_thread.start()
@@ -87,12 +94,6 @@ def main():
     noah_thread.start()
     debug("[qt_entry] initiative loop thread started")
     next_wake_step("内側の気配が、ゆっくり動き始めました。")
-
-    # Restore the existing conversation before presenting the chat window.
-    noah.load_conversation_history()
-    with noah._conversation_lock:
-        history = list(noah.CONVERSATION_HISTORY)
-    chat = ChatWindow(lambda text: _post_chat(text, timeout=60.0), history)
 
     def set_mode(mode: str):
         p = Path(MODE_PATH)
