@@ -122,3 +122,14 @@ def test_empty_message_and_tray_open(app):
     tray.act_talk.trigger()
     assert window.isVisible()
     window.hide()
+
+
+def test_destroying_transcript_cancels_pending_scroll(app):
+    from PyQt6 import sip
+    from src.chat_window import ConversationView
+    transcript = ConversationView()
+    transcript.append_message('Noah', 'スクロール前に画面を破棄する')
+    assert transcript._scroll_timer.isActive()
+    sip.delete(transcript)
+    # A queued callback must not touch the deleted scrollbar.
+    app.processEvents()
