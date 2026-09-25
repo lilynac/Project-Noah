@@ -15,6 +15,8 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 from src.chat_window import ChatWindow
 from src.tray import TrayController, TrayDeps
+from src.companion import CompanionStore
+from src.companion_view import message_html, safe_link
 
 
 @pytest.fixture(scope='module')
@@ -135,6 +137,105 @@ def test_destroying_transcript_cancels_pending_scroll(app):
     app.processEvents()
 
 
+def test_companion_messages_wait_for_boot_and_pending_reply(app, tmp_path):
+    store = CompanionStore(tmp_path / 'companion.json')
+    window = ChatWindow(lambda value: '返事', companion=store)
+    store.delivered('見つけたことがあるよ。')
+    window._booting = True
+    window.receive_initiatives()
+    assert '見つけたこと' not in window.transcript.toPlainText()
+    window._booting = False
+    window._pending = True
+    window.receive_initiatives()
+    assert '見つけたこと' not in window.transcript.toPlainText()
+    window._pending = False
+    window.receive_initiatives()
+    window.receive_initiatives()
+    assert window.transcript.toPlainText().count('見つけたこと') == 1
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_companion_dialog_pauses_research_and_keeps_source_links(app, tmp_path):
+    store = CompanionStore(tmp_path / 'companion.json')
+    store.save_finding('星', '<script>test</script>', [{'title': '資料', 'url': 'https://example.org/stars'}], time.time())
+    window = ChatWindow(lambda value: '返事', companion=store)
+    window.open_companion()
+    dialog = window._companion_dialog
+    assert 'https://example.org/stars' in dialog.content.toHtml()
+    assert '<script>test</script>' in dialog.content.toPlainText()
+    dialog.research.setChecked(False)
+    assert not store.snapshot()['research_enabled']
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_chat_links_escape_markup_and_reject_non_web_urls():
+    assert '&lt;img' in message_html('<img src="bad">')
+    assert '<a href="https://example.org' in message_html('出典\nhttps://example.org')
+    assert '<a ' not in safe_link('javascript:alert(1)')
+    assert '<a ' not in safe_link('file:///tmp/secret')
+
+
+def test_character_animation_stops_when_hidden_or_disabled(app):
+    window = ChatWindow(lambda value: '返事')
+    window.show()
+    app.processEvents()
+    assert window.character.timer.isActive()
+    window.motion_button.setChecked(False)
+    assert not window.character.timer.isActive()
+    window.motion_button.setChecked(True)
+    assert window.character.timer.isActive()
+    window.close()
+    assert not window.character.timer.isActive()
+    window.show()
+    app.processEvents()
+    assert window.character.timer.isActive()
+    window.hide()
+    window.deleteLater()
+
+
+def test_character_layout_reflows_without_hiding_composer(app):
+    from PyQt6.QtWidgets import QBoxLayout
+    window = ChatWindow(lambda value: '返事')
+    window.show()
+    window.resize(420, 760)
+    app.processEvents()
+    assert window.body.direction() == QBoxLayout.Direction.TopToBottom
+    assert window.character.height() <= 240
+    assert window.message_input.isVisible()
+    assert window.transcript.height() > 100
+    window.resize(1020, 760)
+    app.processEvents()
+    assert window.body.direction() == QBoxLayout.Direction.LeftToRight
+    assert window.character.height() > 600
+    window.hide()
+    window.deleteLater()
+
+
+def test_character_tracks_reply_lifecycle_with_motion_disabled(app):
+    release = Event()
+    def reply(value):
+        release.wait(2)
+        return 'うん。'
+    window = ChatWindow(reply)
+    window.motion_button.setChecked(False)
+    try:
+        window.message_input.setText('やあ')
+        window.send()
+        assert window.character.state == 'thinking'
+        release.set()
+        wait_until(app, lambda: not window._pending)
+        assert window.character.state == 'reply'
+        window.character.reply_timer.start(1)
+        wait_until(app, lambda: window.character.state == 'idle')
+        assert not window.character.timer.isActive()
+    finally:
+        release.set()
+        window.hide()
+        window.deleteLater()
+
+
 def test_boot_finishes_before_chat_is_available(app):
     from src.startup_display import WakeSequence
     calls = []
@@ -191,3 +292,15 @@ def test_history_read_error_is_visible(app):
     assert '読み込めません' in dialog.notice.text()
     assert dialog.text.isReadOnly()
     dialog.close()
+
+
+def test_explicit_quit_accepts_close_instead_of_hiding_only(app):
+    from PyQt6.QtGui import QCloseEvent
+    window = ChatWindow(lambda text: '返答')
+    normal = QCloseEvent()
+    window.closeEvent(normal)
+    assert not normal.isAccepted()
+    window.prepare_shutdown()
+    quitting = QCloseEvent()
+    window.closeEvent(quitting)
+    assert quitting.isAccepted()

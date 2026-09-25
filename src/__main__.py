@@ -17,10 +17,9 @@ def run_service_forever(noah):
 
     # バックグラウンド更新
     Thread(target=noah.emotional_update_loop, daemon=True).start()
-    Thread(target=noah.noah_identity_update_loop, daemon=True).start()
     Thread(target=noah.preferences_update_loop, daemon=True).start()
-    Thread(target=noah.noah_research_update_loop, daemon=True).start()
-    Thread(target=noah.research_promote_loop, daemon=True).start()
+    from .companion_life import start_companion
+    start_companion(noah)
     Thread(target=noah.initiative_loop, daemon=True).start()
 
     while True:

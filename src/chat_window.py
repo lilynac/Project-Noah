@@ -3,11 +3,13 @@ from threading import Thread
 from typing import Callable
 
 from .history_view import HistoryDialog
+from .companion_view import CompanionDialog, message_html
+from .character_view import CharacterView
 
-from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer, QEvent
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame, QLineEdit, QPushButton, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout, QLabel, QScrollArea, QFrame, QLineEdit, QPushButton, QSizePolicy,
 )
 
 
@@ -49,11 +51,12 @@ class ConversationView(QScrollArea):
         body.setSpacing(7)
         name = QLabel(speaker)
         name.setObjectName("speaker")
-        message = QLabel(text)
-        message.setTextFormat(Qt.TextFormat.PlainText)
+        message = QLabel(message_html(text))
+        message.setTextFormat(Qt.TextFormat.RichText)
+        message.setOpenExternalLinks(True)
         message.setWordWrap(True)
         message.setMinimumWidth(0)
-        message.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        message.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         message.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         body.addWidget(name)
         body.addWidget(message)
@@ -109,11 +112,23 @@ class ReplySignals(QObject):
 
 
 class ChatWindow(QWidget):
-    def __init__(self, send_message: Callable[[str], str], history=(), archive_loader=None):
+    def __init__(self, send_message: Callable[[str], str], history=(), archive_loader=None, *, companion=None, portrait_path=None):
         super().__init__()
         self._send_message = send_message
         self._archive_loader = archive_loader
         self._history_dialog = None
+        self._companion_dialog = None
+        self._companion = companion
+        self._seen_initiatives = set()
+        if companion:
+            try:
+                self._seen_initiatives = {item['id'] for item in companion.snapshot()['outbox']}
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        self._companion_timer = QTimer(self)
+        self._companion_timer.timeout.connect(self.receive_initiatives)
+        if companion:
+            self._companion_timer.start(1000)
         self._boot_lines = []
         self._booting = False
         self._boot_timer = QTimer(self)
@@ -123,36 +138,51 @@ class ChatWindow(QWidget):
         self._signals = ReplySignals(self)
         self._signals.finished.connect(self._finish_reply)
         self.setWindowTitle("Noah")
-        self.resize(560, 700)
+        self.resize(1020, 760)
         self.setStyleSheet(CHAT_STYLE)
-        self.setMinimumSize(360, 420)
+        self.setMinimumSize(360, 560)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        self.body = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self.body.setContentsMargins(20, 20, 20, 20)
+        self.body.setSpacing(24)
+        self.character = CharacterView(portrait_path, self)
+        self.body.addWidget(self.character, 4)
+        self.motion_button = QPushButton('動き ON', self.character)
+        self.motion_button.setCheckable(True)
+        self.motion_button.setChecked(True)
+        self.motion_button.setGeometry(16, 16, 84, 32)
+        self.motion_button.setStyleSheet('QPushButton { background: rgba(20, 34, 28, 170); color: white; border-radius: 12px; padding: 4px 8px; font-size: 12px; }')
+        self.motion_button.setAccessibleName('キャラクターの動き')
+        self.motion_button.toggled.connect(self._set_character_motion)
+        chat_panel = QWidget()
+        self.body.addWidget(chat_panel, 6)
+        layout = QVBoxLayout(chat_panel)
+        self._chat_layout = layout
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         header = QHBoxLayout()
         header.setSpacing(12)
-        avatar = QLabel("N")
-        avatar.setObjectName("avatar")
-        avatar.setFixedSize(42, 42)
-        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.addWidget(avatar)
         branding = QVBoxLayout()
         branding.setSpacing(2)
         title = QLabel("Noah")
         title.setObjectName("brand")
         subtitle = QLabel("いつもの場所で、あなたのそばに。")
         subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
         branding.addWidget(title)
         branding.addWidget(subtitle)
-        header.addLayout(branding)
-        header.addStretch()
+        header.addLayout(branding, 1)
         self.presence = QLabel("待機中")
         self.presence.setObjectName("presence")
         header.addWidget(self.presence, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(header)
         toolbar = QHBoxLayout()
         toolbar.addStretch()
+        self.companion_button = QPushButton('Noah の日々')
+        self.companion_button.setObjectName('historyButton')
+        self.companion_button.setEnabled(companion is not None)
+        self.companion_button.clicked.connect(self.open_companion)
+        toolbar.addWidget(self.companion_button)
         self.history_button = QPushButton("過去の会話")
         self.history_button.setObjectName("historyButton")
         self.history_button.clicked.connect(self.open_history)
@@ -194,20 +224,53 @@ class ChatWindow(QWidget):
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        self._chat_widgets = (self.history_button, self.transcript, self.status, composer, hint)
+        self._chat_widgets = (self.history_button, self.companion_button, self.transcript, self.status, composer, hint)
         for item in history:
             if item.get("role") in ("user", "assistant") and isinstance(item.get("content"), str):
                 self._append("あなた" if item["role"] == "user" else "Noah", item["content"])
         self._update_send_button()
+        self._arrange_character()
+
+    def _set_character_motion(self, enabled):
+        self.character.set_motion_enabled(enabled)
+        self.motion_button.setText('動き ON' if enabled else '動き OFF')
+
+    def _arrange_character(self):
+        if self.width() < 800:
+            self.body.setDirection(QBoxLayout.Direction.TopToBottom)
+            height = max(140, min(240, int(self.height() * .28)))
+            self.character.setMinimumSize(0, height)
+            self.character.setMaximumHeight(height)
+            self.body.setStretch(0, 0)
+            self.body.setStretch(1, 1)
+        else:
+            self.body.setDirection(QBoxLayout.Direction.LeftToRight)
+            self.character.setMinimumSize(280, 0)
+            self.character.setMaximumHeight(16777215)
+            self.body.setStretch(0, 4)
+            self.body.setStretch(1, 6)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'character'):
+            self._arrange_character()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, 'character'):
+            self.character._sync_timer()
 
     def start_boot(self, sequence, interval_ms=550):
         self._booting = True
         self.presence.setText("目覚めています")
+        self.character.set_state('boot')
         for widget in self._chat_widgets:
             widget.hide()
         if self._history_dialog is not None:
             self._history_dialog.close()
-        self.layout().setStretchFactor(self.boot_card, 1)
+        if self._companion_dialog is not None:
+            self._companion_dialog.close()
+        self._chat_layout.setStretchFactor(self.boot_card, 1)
         self._boot_lines = list(sequence.steps) + list(sequence.ready)
         self.boot_label.setText(sequence.opening)
         self.boot_card.show()
@@ -224,10 +287,11 @@ class ChatWindow(QWidget):
         self._boot_lines.clear()
         self.boot_card.hide()
         self._booting = False
-        self.layout().setStretchFactor(self.boot_card, 0)
+        self._chat_layout.setStretchFactor(self.boot_card, 0)
         for widget in self._chat_widgets:
             widget.show()
         self.presence.setText("待機中")
+        self.character.set_state('idle')
         self.message_input.setFocus()
         self.transcript._scroll_timer.start(0)
 
@@ -244,6 +308,28 @@ class ChatWindow(QWidget):
     def _append(self, speaker: str, text: str):
         self.transcript.append_message(speaker, text)
 
+    def open_companion(self):
+        if self._booting or self._companion is None:
+            return
+        if self._companion_dialog is not None:
+            self._companion_dialog.close()
+            self._companion_dialog.deleteLater()
+        self._companion_dialog = CompanionDialog(self._companion, self)
+        self._companion_dialog.show()
+
+    def receive_initiatives(self):
+        if self._booting or self._pending or self._companion is None:
+            return
+        try:
+            messages = self._companion.snapshot()['outbox']
+            for item in messages:
+                if item['id'] not in self._seen_initiatives:
+                    self._append('Noah', item['text'])
+                    self.character.set_state('reply')
+                    self._seen_initiatives.add(item['id'])
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+
     def _update_send_button(self):
         self.send_button.setEnabled(not self._pending and bool(self.message_input.text().strip()))
 
@@ -254,8 +340,15 @@ class ChatWindow(QWidget):
         self.message_input.setFocus()
 
     def closeEvent(self, event: QCloseEvent):
+        if getattr(self, '_quitting', False):
+            event.accept()
+            return
         event.ignore()
         self.hide()
+
+    def prepare_shutdown(self):
+        """Allow QApplication.quit to close the window instead of hiding it."""
+        self._quitting = True
 
     def send(self):
         text = self.message_input.text().strip()
@@ -268,6 +361,7 @@ class ChatWindow(QWidget):
         self._append("あなた", text)
         self.status.setText("Noah が考えています…")
         self.presence.setText("考え中")
+        self.character.set_state('thinking')
 
         def worker():
             try:
@@ -284,6 +378,7 @@ class ChatWindow(QWidget):
     def _finish_reply(self, reply: str, ok: bool):
         self._pending = False
         self.presence.setText("待機中" if ok else "送信エラー")
+        self.character.set_state('reply' if ok else 'error')
         if ok:
             self._append("Noah", reply)
             self.status.setText("聞いているよ。")

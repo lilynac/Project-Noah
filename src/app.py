@@ -19,12 +19,11 @@ def run_service_forever(runtime):
     from .service import run_http_service
     __env['Thread'](target=__env['run_http_service'], daemon=True).start()
     __env['Thread'](target=__env['emotional_update_loop'], daemon=True).start()
-    __env['Thread'](target=__env['noah_identity_update_loop'], daemon=True).start()
     __env['Thread'](target=__env['preferences_update_loop'], daemon=True).start()
-    __env['Thread'](target=__env['noah_research_update_loop'], daemon=True).start()
-    __env['Thread'](target=__env['research_promote_loop'], daemon=True).start()
+    from .companion_life import start_companion
+    from . import Noah
+    start_companion(Noah)
     __env['Thread'](target=__env['initiative_loop'], daemon=True).start()
-    __env['Thread'](target=__env['affection_update_loop'], daemon=True).start()
     try:
         while True:
             __env['time'].sleep(1.0)
@@ -41,12 +40,11 @@ def main(runtime):
         return
     __env['startup_sequence']()
     __env['Thread'](target=__env['emotional_update_loop'], daemon=True).start()
-    __env['Thread'](target=__env['noah_identity_update_loop'], daemon=True).start()
     __env['Thread'](target=__env['preferences_update_loop'], daemon=True).start()
-    __env['Thread'](target=__env['noah_research_update_loop'], daemon=True).start()
-    __env['Thread'](target=__env['research_promote_loop'], daemon=True).start()
+    from .companion_life import start_companion
+    from . import Noah
+    start_companion(Noah)
     __env['Thread'](target=__env['initiative_loop'], daemon=True).start()
-    __env['Thread'](target=__env['affection_update_loop'], daemon=True).start()
     while True:
         try:
             raw = input(f"{__env['INTERNAL_NAME']} > ")

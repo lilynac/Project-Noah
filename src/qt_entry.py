@@ -19,7 +19,6 @@ from datetime import datetime
 from .tray import TrayController, TrayDeps
 from .chat_window import ChatWindow
 from .service import run_http_service
-from .desktop_noah import create_overlay
 from .paths import MODE_PATH, CONSULTS_PATH
 from .startup_display import build_wake_sequence, debug, sleep_message
 
@@ -61,6 +60,14 @@ def _post_chat(message: str, timeout: float = 30.0) -> str:
 def main():
     app = QApplication(sys.argv)
     app.setApplicationDisplayName("Noah")
+    from .macos_tray_guard import install_tray_guard
+    try:
+        install_tray_guard(app)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        if os.environ.get('NOAH_NO_DIALOG') != '1':
+            QMessageBox.critical(None, 'Noah', str(exc))
+        raise SystemExit(1)
     wake_sequence = build_wake_sequence(allow_api=False)
     stop_event = Event()
     # ★これが重要：ウィンドウがなくてもアプリを終了させない
@@ -77,7 +84,8 @@ def main():
         path = Path(CONSULTS_PATH)
         text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
         return re.sub(r"^(\[[^\n]+\]) @\w+\s*$", r"\1", text, flags=re.MULTILINE)
-    chat = ChatWindow(lambda text: _post_chat(text, timeout=60.0), history, load_archive)
+    chat = ChatWindow(lambda text: _post_chat(text, timeout=60.0), history, load_archive,
+                      companion=noah.companion, portrait_path=_resolve_icon_path())
 
     # ---- IPC サービス起動（/chat, /health）----
     server_thread = Thread(target=run_http_service, args=("127.0.0.1", 8765, stop_event))
@@ -122,6 +130,7 @@ def main():
 
     def quit_app():
         debug("[Quit] quitting…")
+        chat.prepare_shutdown()
         sleep_message()
         try:
             tray.tray.hide()  # macで残像が残るのを防ぐ
@@ -169,7 +178,10 @@ def main():
         app.quit()
         return
 
-    overlay = create_overlay()  # ★参照保持（GC対策＆後で操作するため）
+    # ChatWindow owns the conversation and status display. The legacy desktop
+    # overlay is only for the standalone desktop_noah entry point.
+    from .companion_life import start_companion
+    companion_thread = start_companion(noah, stop_event)
 
     # ---- Tray を作る（←これが抜けてた）----
     icon_path = _resolve_icon_path()
@@ -201,6 +213,7 @@ def main():
     finally:
         debug("[qt_entry] stopping threads…")
         stop_event.set()
+        companion_thread.join(timeout=1.0)
 
         # Noahを先に止める（UIに影響しにくい）
         try:

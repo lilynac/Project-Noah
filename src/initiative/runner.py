@@ -1,4 +1,6 @@
 # Split-out implementation from Noah.py.
+from src.companion import source_lines
+from src.initiative.signals import InitiativeSignals
 
 def initiative_loop(stop_event, runtime=None):
     __env = runtime if runtime is not None else {}
@@ -30,6 +32,19 @@ def initiative_loop(stop_event, runtime=None):
             if __env['DEBUG_INITIATIVE_LOOP']:
                 logger.info('INITIATIVE_LOOP_TICK reached')
             now = __env['time'].time()
+            companion = __env['companion']
+            if not companion.talk_due(now) or __env['is_work_mode']():
+                continue
+            ok, reason = __env['should_fire_initiative'](now)
+            if not ok:
+                __env['set_initiative_state']('OFF', reason)
+                continue
+            # Fresh values on every tick, including the legacy decision path.
+            ini = InitiativeSignals()
+            recent_turns = __env['_recent_turn_texts']()
+            memory_ctx = None
+            state = __env['load_state_snippet']()
+            dec = None
             logger.info('INITIATIVE_MEMORY_POINT ns=initiative before_retrieve')
             if __env['DecisionEngine'] is None or __env['load_signals'] is None:
                 ok, reason = __env['should_fire_initiative'](now)
@@ -94,24 +109,33 @@ def initiative_loop(stop_event, runtime=None):
                 state
             except NameError:
                 state = __env['load_state_snippet']()
-            today = __env['datetime'].now().date()
-            research_phrase = __env['build_research_phrase'](research_path=__env['NOAH_RESEARCH_PATH'], now_date=today, initiative_count=__env['_initiative_count'], injected_today=__env['_research_injected_today'], last_injected_date=__env['_last_research_injected_date'], is_work_mode=__env['is_work_mode'](), daily_cap=2, every_n=5)
-            gen = __env['generate_initiative_text'](style=style, signals=ini, recent_turns=recent_turns, state_snippet=state, research_phrase=research_phrase, llm_client=__env['client'], model='gpt-4o-mini', memory_ctx=memory_ctx)
+            companion_context, finding = companion.context(initiative=True)
+            generation_client = __env['client'].with_options(timeout=45.0, max_retries=0) if __env['client'] else None
+            gen = __env['generate_initiative_text'](style=style, signals=ini, recent_turns=recent_turns, state_snippet=state, companion_context=companion_context, llm_client=generation_client, model='gpt-4o-mini', memory_ctx=memory_ctx)
             text = gen.text
+            # API failures should not turn scheduled discoveries into canned claims.
+            if 'llm_generated' not in gen.reasons:
+                companion.delayed(now)
+                continue
             if __env['_initiative_is_duplicate'](text):
                 base_seed = int(now) ^ __env['_initiative_count'] * 131
                 text_alt = None
                 for i in range(2):
-                    gen2 = __env['generate_initiative_text'](style=style, signals=ini, recent_turns=recent_turns, state_snippet=state, research_phrase=research_phrase, seed=base_seed + i + 1, llm_client=__env['client'], model='gpt-4o-mini', memory_ctx=memory_ctx)
-                    if not __env['_initiative_is_duplicate'](gen2.text):
+                    gen2 = __env['generate_initiative_text'](style=style, signals=ini, recent_turns=recent_turns, state_snippet=state, companion_context=companion_context, seed=base_seed + i + 1, llm_client=generation_client, model='gpt-4o-mini', memory_ctx=memory_ctx)
+                    if 'llm_generated' in gen2.reasons and not __env['_initiative_is_duplicate'](gen2.text):
                         text_alt = gen2.text
                         break
                 if not text_alt:
                     __env['set_initiative_state']('OFF', 'dup_skip')
+                    companion.delayed(now)
                     continue
                 text = text_alt
+            if stop_event is not None and stop_event.is_set():
+                return
+            text += source_lines(finding)
             if not __env['emit_initiative'](text):
                 continue
+            companion.delivered(text, finding['id'] if finding else None)
             try:
                 if __env['touch_noah_message'] and __env['save_signals']:
                     __env['touch_noah_message'](ini, now_ts=__env['time'].time(), is_initiative=True)
