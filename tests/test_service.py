@@ -6,7 +6,7 @@ import sys
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 from types import ModuleType
 from unittest.mock import Mock
 
@@ -35,16 +35,29 @@ def ipc(monkeypatch):
     )
     service = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(service)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), service.NoahIPCHandler)
+    request_finished = Event()
+
+    class FinishedHandler(service.NoahIPCHandler):
+        def finish(self):
+            try:
+                super().finish()
+            finally:
+                request_finished.set()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FinishedHandler)
     thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
     thread.start()
 
     def post(body, path="/chat"):
+        request_finished.clear()
         connection = HTTPConnection(*server.server_address, timeout=2)
         try:
             connection.request("POST", path, body, {"Content-Type": "application/json"})
             response = connection.getresponse()
-            return response.status, json.loads(response.read())
+            payload = json.loads(response.read())
+            # Receiving bytes does not imply do_POST's finally block has run.
+            assert request_finished.wait(5), "HTTP handler did not finish"
+            return response.status, payload
         finally:
             connection.close()
 
