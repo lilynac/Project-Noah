@@ -1,6 +1,8 @@
 """A small window onto Noah's interests, discoveries and chosen plans."""
 from .companion import RESEARCH_DAILY_LIMIT, TALK_DAILY_LIMIT, INTEREST_PILLARS, interest_pillar
 
+from .initiative.quality import QUALITY_LABELS
+
 from datetime import datetime
 from html import escape
 from urllib.parse import urlsplit
@@ -38,6 +40,9 @@ def journal_html(state):
         when = date_label(state['next_' + key + '_at']) if state[enabled] else 'お休み中'
         parts.append('<p>' + label + ' · ' + when + '</p>')
     parts.append('<p>予定は目安。会話中や作業中は待つこともあるよ。</p>')
+    quality = state.get('last_quality', {})
+    if quality.get('reason') in QUALITY_LABELS and quality['reason'] != 'approved':
+        parts.append('<p>' + escape(QUALITY_LABELS[quality['reason']]) + ' · ' + date_label(quality['at']) + '</p>')
     if state['last_error']:
         parts.append('<p>' + escape(state['last_error']) + '</p>')
     parts.append('<h3>いま気になっていること</h3>')

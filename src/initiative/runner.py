@@ -1,5 +1,6 @@
 # Split-out implementation from Noah.py.
 from src.companion import source_lines
+from src.initiative.quality import review_initiative, QualityResult
 from src.initiative.signals import InitiativeSignals
 
 def initiative_loop(stop_event, runtime=None):
@@ -118,18 +119,14 @@ def initiative_loop(stop_event, runtime=None):
                 companion.delayed(now)
                 continue
             if __env['_initiative_is_duplicate'](text):
-                base_seed = int(now) ^ __env['_initiative_count'] * 131
-                text_alt = None
-                for i in range(2):
-                    gen2 = __env['generate_initiative_text'](style=style, signals=ini, recent_turns=recent_turns, state_snippet=state, companion_context=companion_context, seed=base_seed + i + 1, llm_client=generation_client, model='gpt-4o-mini', memory_ctx=memory_ctx)
-                    if 'llm_generated' in gen2.reasons and not __env['_initiative_is_duplicate'](gen2.text):
-                        text_alt = gen2.text
-                        break
-                if not text_alt:
-                    __env['set_initiative_state']('OFF', 'dup_skip')
-                    companion.delayed(now)
-                    continue
-                text = text_alt
+                quality = QualityResult(False, 'duplicate')
+            else:
+                quality = review_initiative(generation_client, text, companion_context, recent_turns)
+            companion.record_quality(quality.reason, __env['time'].time())
+            if not quality.approved:
+                __env['set_initiative_state']('OFF', 'quality_' + quality.reason)
+                companion.delayed(__env['time'].time())
+                continue
             if stop_event is not None and stop_event.is_set():
                 return
             text += source_lines(finding)

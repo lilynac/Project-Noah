@@ -66,7 +66,7 @@ def initial_state():
         "next_reflection_at": 0, "next_research_at": 0, "next_talk_at": 0,
         "research_topic": "", "plan_reason": "会話の中から、気になることを見つけていく。",
         "daily": {"day": "", "reflection": 0, "research": 0, "talk": 0},
-        "last_error": "", "last_reflected_at": 0,
+        "last_error": "", "last_reflected_at": 0, "last_quality": {},
         "last_talk_at": 0,
     }
 
@@ -357,6 +357,12 @@ class CompanionStore:
             state['research_threads'] = state['research_threads'][-12:]
             state["last_error"] = ""
         self.change(update)
+
+    def record_quality(self, reason, now):
+        from .initiative.quality import QUALITY_LABELS
+        if reason not in QUALITY_LABELS:
+            raise ValueError('Unknown quality result')
+        self.change(lambda state: state.update(last_quality={'reason': reason, 'at': now}))
 
     def note_error(self, kind):
         # Do not expose exceptions, credentials or prompts in the UI.

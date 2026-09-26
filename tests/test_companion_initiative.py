@@ -22,6 +22,9 @@ class OneTick:
 
 
 def runtime(store, now):
+    client = Mock()
+    client.with_options.return_value.responses.create.return_value = SimpleNamespace(
+        status='completed', output_text='{"concrete":true,"grounded":true,"honest":true,"novel":true}')
     return {
         'companion': store,
         '_get_logger': Mock(), 'random': SimpleNamespace(uniform=lambda *args: 0),
@@ -30,7 +33,7 @@ def runtime(store, now):
         'should_fire_initiative': Mock(return_value=(True, 'ready')),
         '_recent_turn_texts': lambda: ['星の話'], 'load_state_snippet': lambda: '',
         'DecisionEngine': None, 'load_signals': None, 'set_initiative_state': Mock(),
-        '_state_lock': Lock(), '_initiative_count': 0, 'client': Mock(),
+        '_state_lock': Lock(), '_initiative_count': 0, 'client': client,
         'generate_initiative_text': Mock(return_value=SimpleNamespace(text='星の色の違いが気になるよ。', reasons=['llm_generated'])),
         '_initiative_is_duplicate': lambda value: False,
         'emit_initiative': Mock(return_value=True),
@@ -100,3 +103,30 @@ def test_question_removal_keeps_complete_observation():
 def test_clip_drops_unfinished_trailing_sentence():
     from src.initiative.generation import _clip
     assert _clip('具体的な発見。' + '続き' * 80, 30) == '具体的な発見。'
+
+
+@pytest.mark.parametrize('failure', ['honest', 'concrete', 'novel', 'grounded', 'timeout'])
+def test_quality_rejection_preserves_finding_and_delays_without_quota(tmp_path, failure):
+    import json
+    now = datetime(2026, 9, 23, 12).timestamp()
+    store = CompanionStore(tmp_path / 'companion.json')
+    store.seed([], now)
+    store.change(lambda s: s.update(next_talk_at=now))
+    store.save_finding('星', '星の色と温度。', [{'title': '資料', 'url': 'https://example.org'}], now)
+    env = runtime(store, now)
+    api = env['client'].with_options.return_value.responses.create
+    if failure == 'timeout':
+        api.side_effect = TimeoutError()
+    else:
+        flags = dict(concrete=True, grounded=True, honest=True, novel=True)
+        flags[failure] = False
+        api.return_value.output_text = json.dumps(flags)
+    initiative_loop(OneTick(), env)
+    env['emit_initiative'].assert_not_called()
+    env['generate_initiative_text'].assert_called_once()
+    saved = store.snapshot()
+    assert saved['daily']['talk'] == 0
+    assert saved['outbox'] == []
+    assert not saved['findings'][0]['shared']
+    assert saved['next_talk_at'] == now + 3600
+    assert saved['last_quality']['reason'] == ('unavailable' if failure == 'timeout' else failure)
