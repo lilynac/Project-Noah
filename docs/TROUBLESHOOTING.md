@@ -275,3 +275,18 @@ git rebase --abort
 ```bash
 git status
 ```
+# macOS 27 でメニューバーを開くと Python が異常終了する
+
+`NSInternalInconsistencyException` / `Invalid message sent to event` / `NSEvent clickCount` が同じ記録にあり、直後のスタックに `libqcocoa.dylib` と `NSMenuTrackingSession` がある場合、Qt のステータスアイコン処理が原因の可能性があります。
+
+2026-09-23 の Noah のクラッシュ記録（16:27:35）はこの経路でした。macOS 27 の非マウスイベントに対し、Qt がマウス用の `clickCount` を呼んでいました。[Qt 開発版の対策](https://github.com/qt/qtbase/blob/dev/src/plugins/platforms/cocoa/qcocoasystemtrayicon.mm)を確認していますが、同日に配布されている Qt 6.11.2 のソースにはまだこのガードがありません。
+
+Noah は `QApplication` 作成直後、macOS 27 以降の Cocoa バックエンドに限り `src/native/macos_tray_guard.m` を読み込みます。Qt の `QStatusItemDelegate` の2つのコールバックだけを保護し、非マウスイベントから不要な activation 通知を発生させません。メニュー自体の表示や各項目の処理、通常のマウスイベントは維持します。AppKit や NSEvent のメソッド、OS のセキュリティ設定は変更しません。
+
+この互換部品は既存の Xcode Command Line Tools の clang で起動時に一時フォルダへ構築します。構築や読み込みに失敗した場合は、理由を表示して通常終了し、危険なトレイ初期化には進みません。Windows/Linux、macOS 26以前、offscreen のGUIテストには適用しません。修正済み Qt が正式配布され採用できた段階で、この一時対策を外せます。
+
+反映には実行中の Noah を Quit し、`Noah.app` から起動し直してください。macOS のクラッシュ通知の「再度開く」はランチャーの準備を通らない可能性があるため、通知は「OK」で閉じてください。
+
+## Quit 後に再起動できない
+
+会話ウィンドウは通常の閉じる操作で非表示になりますが、Quit時は閉じるイベントを受け入れて終了します。古い版で終了が残る問題を修正しました。通常の閉じる操作で常駐する動作は維持しています。

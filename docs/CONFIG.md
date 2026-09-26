@@ -170,3 +170,6 @@ NOAH_LOCK_FILE=run/noah.lock
 # ヘッドレス・CI向け
 NOAH_NO_DIALOG=1
 ```
+# Noah の日々の設定
+
+`NOAH_REFLECTION_MODEL`（初期値 `gpt-4o-mini`）と `NOAH_RESEARCH_MODEL`（初期値 `gpt-4.1-mini`）で振り返り・検索モデルを指定できます。検索と声かけの休止はアプリの「Noah の日々」から設定します。回数・静かな時間・保存内容は [COMPANION.md](COMPANION.md) を参照してください。

@@ -257,11 +257,11 @@ Noahはひとりの人物のように、静かに目を覚まします。
     return seq
 
 
-def build_wake_sequence() -> WakeSequence:
+def build_wake_sequence(*, allow_api: bool = True) -> WakeSequence:
     """現在の感情ステータスから起動演出を作る。API失敗時はローカルテンプレート。"""
     status = read_emotion_status()
     fallback = _local_sequence(status)
-    seq = _api_sequence(status, fallback)
+    seq = _api_sequence(status, fallback) if allow_api else None
     if seq is not None:
         return seq
     return fallback

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -17,9 +19,8 @@ from datetime import datetime
 from .tray import TrayController, TrayDeps
 from .chat_window import ChatWindow
 from .service import run_http_service
-from .desktop_noah import create_overlay
-from .paths import MODE_PATH
-from .startup_display import build_wake_sequence, debug, wake_header, wake_step, wake_ready, sleep_message
+from .paths import MODE_PATH, CONSULTS_PATH
+from .startup_display import build_wake_sequence, debug, sleep_message
 
 
 
@@ -58,41 +59,44 @@ def _post_chat(message: str, timeout: float = 30.0) -> str:
 
 def main():
     app = QApplication(sys.argv)
-    wake_sequence = build_wake_sequence()
-    wake_header(wake_sequence)
+    app.setApplicationDisplayName("Noah")
+    from .macos_tray_guard import install_tray_guard
+    try:
+        install_tray_guard(app)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        if os.environ.get('NOAH_NO_DIALOG') != '1':
+            QMessageBox.critical(None, 'Noah', str(exc))
+        raise SystemExit(1)
+    wake_sequence = build_wake_sequence(allow_api=False)
     stop_event = Event()
-    debug("[qt_entry] stop_event created")
-    steps = list(wake_sequence.steps)
-
-    def next_wake_step(default: str, delay: float = 0.25) -> None:
-        msg = steps.pop(0) if steps else default
-        wake_step(msg, delay)
-
-    next_wake_step("薄い眠りから、呼吸を戻しています…")
-
     # ★これが重要：ウィンドウがなくてもアプリを終了させない
     app.setQuitOnLastWindowClosed(False)
 
     debug("[qt_entry] starting…")
 
+    from . import Noah as noah
+    # Restore the existing conversation before presenting the chat window.
+    noah.load_conversation_history()
+    with noah._conversation_lock:
+        history = list(noah.CONVERSATION_HISTORY)
+    def load_archive():
+        path = Path(CONSULTS_PATH)
+        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        return re.sub(r"^(\[[^\n]+\]) @\w+\s*$", r"\1", text, flags=re.MULTILINE)
+    chat = ChatWindow(lambda text: _post_chat(text, timeout=60.0), history, load_archive,
+                      companion=noah.companion, portrait_path=_resolve_icon_path())
+
     # ---- IPC サービス起動（/chat, /health）----
     server_thread = Thread(target=run_http_service, args=("127.0.0.1", 8765, stop_event))
     server_thread.start()
     debug("[qt_entry] http service thread started")
-    next_wake_step("声の通り道を開きました。")
 
     # ---- Noah initiative loop ----
     from . import Noah as noah
     noah_thread = Thread(target=noah.initiative_loop, args=(stop_event,))  # ← daemonにしない
     noah_thread.start()
     debug("[qt_entry] initiative loop thread started")
-    next_wake_step("内側の気配が、ゆっくり動き始めました。")
-
-    # Restore the existing conversation before presenting the chat window.
-    noah.load_conversation_history()
-    with noah._conversation_lock:
-        history = list(noah.CONVERSATION_HISTORY)
-    chat = ChatWindow(lambda text: _post_chat(text, timeout=60.0), history)
 
     def set_mode(mode: str):
         p = Path(MODE_PATH)
@@ -126,6 +130,7 @@ def main():
 
     def quit_app():
         debug("[Quit] quitting…")
+        chat.prepare_shutdown()
         sleep_message()
         try:
             tray.tray.hide()  # macで残像が残るのを防ぐ
@@ -153,7 +158,6 @@ def main():
         debug("[WARN] System tray is not available. quitting.")
 
         # ヘッドレス環境（例: LinuxのCI）ではダイアログを出さずに終了する
-        import os
         headless = False
         if sys.platform.startswith("linux"):
             if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
@@ -174,7 +178,10 @@ def main():
         app.quit()
         return
 
-    overlay = create_overlay()  # ★参照保持（GC対策＆後で操作するため）
+    # ChatWindow owns the conversation and status display. The legacy desktop
+    # overlay is only for the standalone desktop_noah entry point.
+    from .companion_life import start_companion
+    companion_thread = start_companion(noah, stop_event)
 
     # ---- Tray を作る（←これが抜けてた）----
     icon_path = _resolve_icon_path()
@@ -190,12 +197,9 @@ def main():
 
     tray.show()
     debug("[qt_entry] tray.show() called")
-    next_wake_step("画面の端に、小さな居場所を作りました。", 0.2)
-    for extra in steps:
-        wake_step(extra, 0.18)
-    wake_ready(wake_sequence)
+    if os.getenv("NOAH_BOOT_STYLE", "poetic").lower() != "plain":
+        chat.start_boot(wake_sequence)
     chat.show_chat()
-    print("会話ウィンドウに入力して Enter で送信できます。")
 
     # ★保険：Qtイベントループが落ちないよう、何もしないタイマーを回す
     keepalive = QTimer()
@@ -209,6 +213,7 @@ def main():
     finally:
         debug("[qt_entry] stopping threads…")
         stop_event.set()
+        companion_thread.join(timeout=1.0)
 
         # Noahを先に止める（UIに影響しにくい）
         try:

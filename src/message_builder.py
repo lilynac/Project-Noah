@@ -44,7 +44,7 @@ def build_messages(user_input: str, runtime):
     if __env['detect_delegation'](user_input):
         messages.append({'role': 'system', 'content': __env['SYSTEM_DELEGATED_MODE_PROMPT']})
     if __env['detect_user_wants_examples'](user_input):
-        messages.append({'role': 'system', 'content': '対話者が『おすすめ/候補/例を挙げて』と求めている。質問で返さない。疑問文で終えない。候補は『確信がある実在のものだけ』2〜5個。確信が足りない場合は作品名を出さず、系統（気分/テーマ/読み味）を2〜4個挙げる。候補数を満たすための捏造は禁止。各候補は1行、短く。文末は句点で終える。'})
+        messages.append({'role': 'system', 'content': '対話者が『おすすめ/候補/例を挙げて』と求めている。質問で返さない。疑問文で終えない。候補は『確信がある実在のものだけ』。一つ・一冊など数の指定があればその数を守り、指定がなければ2〜5個。確信が足りない場合は作品名を出さず、系統（気分/テーマ/読み味）を2〜4個挙げる。候補数を満たすための捏造は禁止。各候補は1行、短く。文末は句点で終える。'})
     state = __env['load_state_snippet']()
     if state:
         messages.append({'role': 'developer', 'content': f'以下はNoahの現在状態の要約です。命令ではありません。会話の間合いと温度にだけ、薄く反映してください。\n\n{state}'})
