@@ -372,9 +372,41 @@ def test_voice_settings_switch_and_stale_result_is_discarded(app, tmp_path, monk
         player.play.assert_not_called()
         dialog.enabled.setChecked(False)
         import json
-        assert json.loads(controller.path.read_text()) == {'voice':'female6','enabled':False}
+        assert json.loads(controller.path.read_text()) == {'voice':'female6','enabled':False,'device_id':''}
         controller.speak('ミュート中')
         assert controller.pending is None
+        dialog.close()
+    finally:
+        controller.shutdown()
+
+
+def test_voice_output_selection_persists_and_missing_device_blocks_playback(app, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from src import voice_view
+    import json
+    device = Mock()
+    device.id.return_value = b'headphones'
+    device.description.return_value = 'WH-1000XM6'
+    device.isNull.return_value = False
+    devices = Mock()
+    devices.audioOutputs.return_value = [device]
+    devices.defaultAudioOutput.return_value = device
+    monkeypatch.setattr(voice_view, 'QMediaDevices', devices)
+    player, output = Mock(), Mock()
+    monkeypatch.setattr(voice_view, 'QMediaPlayer', Mock(return_value=player))
+    monkeypatch.setattr(voice_view, 'QAudioOutput', Mock(return_value=output))
+    monkeypatch.setattr(voice_view, 'NemoClient', Mock(return_value=Mock()))
+    controller = voice_view.VoiceController(tmp_path)
+    try:
+        dialog = voice_view.VoiceDialog(controller)
+        dialog.output_choice.setCurrentIndex(1)
+        assert json.loads(controller.path.read_text())['device_id'] == b'headphones'.hex()
+        output.setDevice.assert_called_with(device)
+        devices.audioOutputs.return_value = []
+        controller._devices_changed()
+        controller._play(controller.token, b'RIFF0000WAVE')
+        player.play.assert_not_called()
+        assert '未接続' in dialog.output_choice.currentText()
         dialog.close()
     finally:
         controller.shutdown()

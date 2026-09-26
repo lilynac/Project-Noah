@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Condition, Thread
 
 from PyQt6.QtCore import QCoreApplication, QLibraryInfo, QObject, QUrl, pyqtSignal
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PyQt6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from .voice import NemoClient, VOICES, SAMPLE, speech_text
 
@@ -17,17 +17,21 @@ class VoiceController(QObject):
     ready = pyqtSignal(int, bytes)
     failed = pyqtSignal(int)
     status_changed = pyqtSignal(str)
+    devices_changed = pyqtSignal()
 
     def __init__(self, root, parent=None):
         super().__init__(parent)
         self.path = Path(root) / 'data/memory/voice.json'
         self.voice, self.enabled = 'female1', True
+        self.device_id = ''
         try:
             settings = json.loads(self.path.read_text())
             if settings.get('voice') in VOICES:
                 self.voice = settings['voice']
             if type(settings.get('enabled')) is bool:
                 self.enabled = settings['enabled']
+            if isinstance(settings.get('device_id'), str):
+                self.device_id = settings['device_id']
         except (OSError, ValueError, AttributeError):
             pass
         executable = 'run.exe' if os.name == 'nt' else 'run'
@@ -48,6 +52,9 @@ class VoiceController(QObject):
         self.player = QMediaPlayer(self)
         self.output = QAudioOutput(self)
         self.output.setVolume(.8)
+        self.devices = QMediaDevices(self)
+        self.devices.audioOutputsChanged.connect(self._devices_changed)
+        self._select_output()
         self.player.setAudioOutput(self.output)
         self.player.errorOccurred.connect(lambda *_: self.status_changed.emit('音声を再生できませんでした。'))
         self.player.mediaStatusChanged.connect(self._media_status)
@@ -60,15 +67,33 @@ class VoiceController(QObject):
         self.condition = Condition()
         Thread(target=self._worker, name='noah-voice', daemon=True).start()
 
-    def configure(self, voice, enabled):
+    def configure(self, voice, enabled, device_id=None):
         if voice not in VOICES:
             raise ValueError('Unknown voice')
         self.stop()
         self.voice, self.enabled = voice, bool(enabled)
+        if device_id is not None:
+            self.device_id = device_id
+        self._select_output()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix('.tmp')
-        temporary.write_text(json.dumps({'voice': voice, 'enabled': self.enabled}), encoding='utf-8')
+        temporary.write_text(json.dumps({'voice': voice, 'enabled': self.enabled, 'device_id': self.device_id}), encoding='utf-8')
         os.replace(temporary, self.path)
+
+    def _select_output(self):
+        device = QMediaDevices.defaultAudioOutput()
+        if self.device_id:
+            device = next((d for d in QMediaDevices.audioOutputs()
+                           if bytes(d.id()).hex() == self.device_id), None)
+            if device is None:
+                return False
+        self.output.setDevice(device)
+        return not device.isNull()
+
+    def _devices_changed(self):
+        self.stop()
+        self._select_output()
+        self.devices_changed.emit()
 
     def speak(self, value, *, preview=False):
         if self.closed or (not preview and not self.enabled):
@@ -109,6 +134,9 @@ class VoiceController(QObject):
 
     def _play(self, token, data):
         if self.closed or token != self.token:
+            return
+        if not self._select_output():
+            self.status_changed.emit('選択した出力先が見つかりません。接続または出力先を確認してください。')
             return
         self._clear_file()
         with tempfile.NamedTemporaryFile(suffix='.wav', prefix='noah-voice-', delete=False) as stream:
@@ -157,6 +185,11 @@ class VoiceDialog(QDialog):
             self.choice.addItem(f'{name} · CV：{cv}', key)
         self.choice.setCurrentIndex(self.choice.findData(controller.voice))
         layout.addWidget(self.choice)
+        layout.addWidget(QLabel('音声の出力先（Noahの音量：80%）'))
+        self.output_choice = QComboBox()
+        layout.addWidget(self.output_choice)
+        self.refresh_outputs()
+        controller.devices_changed.connect(self.refresh_outputs)
         self.enabled = QCheckBox('新しい返答とNoahからの声かけを読み上げる')
         self.enabled.setChecked(controller.enabled)
         layout.addWidget(self.enabled)
@@ -176,12 +209,27 @@ class VoiceDialog(QDialog):
         layout.addWidget(credit)
         self.choice.currentIndexChanged.connect(self.save)
         self.enabled.toggled.connect(self.save)
+        self.output_choice.currentIndexChanged.connect(self.save)
         self.preview.clicked.connect(lambda: controller.speak(SAMPLE, preview=True))
         self.stop_button.clicked.connect(controller.stop)
         controller.status_changed.connect(self.status.setText)
 
     def save(self, *_):
         try:
-            self.controller.configure(self.choice.currentData(), self.enabled.isChecked())
+            self.controller.configure(self.choice.currentData(), self.enabled.isChecked(), self.output_choice.currentData())
         except OSError:
             self.status.setText('音声設定を保存できませんでした。')
+
+    def refresh_outputs(self):
+        self.output_choice.blockSignals(True)
+        self.output_choice.clear()
+        default = QMediaDevices.defaultAudioOutput().description() or 'なし'
+        self.output_choice.addItem(f'Mac/OSの設定に従う：{default}', '')
+        for device in QMediaDevices.audioOutputs():
+            self.output_choice.addItem(device.description(), bytes(device.id()).hex())
+        index = self.output_choice.findData(self.controller.device_id)
+        if index < 0:
+            self.output_choice.addItem('保存した出力先（未接続）', self.controller.device_id)
+            index = self.output_choice.count() - 1
+        self.output_choice.setCurrentIndex(index)
+        self.output_choice.blockSignals(False)
