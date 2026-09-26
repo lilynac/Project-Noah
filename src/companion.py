@@ -64,6 +64,8 @@ def initial_state():
         "pending": [], "memories": [], "preferences": [], "interests": [],
         "improvements": [], "pillars_seeded": False, "research_threads": [],
         "conversation_trials": [], "adopted_style": "",
+        "video_learning_enabled": False, "next_video_at": 0,
+        "video_candidates": [], "video_observations": [], "video_preferences": [], "video_status": "まだ調べていない。",
         "findings": [], "outbox": [], "research_enabled": True, "talk_enabled": True,
         "next_reflection_at": 0, "next_research_at": 0, "next_talk_at": 0,
         "research_topic": "", "plan_reason": "会話の中から、気になることを見つけていく。",
@@ -111,7 +113,7 @@ class CompanionStore:
             for key, value in state.items():
                 if type(value) in (int, float) and (not math.isfinite(value) or value < 0):
                     raise ValueError("Invalid companion number: " + key)
-            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials"):
+            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials", "video_candidates", "video_observations", "video_preferences"):
                 if not all(isinstance(item, dict) for item in state[key]):
                     raise ValueError("Invalid companion records: " + key)
         return state
@@ -209,7 +211,7 @@ class CompanionStore:
         self.change(update)
 
     def set_enabled(self, key, enabled):
-        if key not in ("research_enabled", "talk_enabled"):
+        if key not in ("research_enabled", "talk_enabled", "video_learning_enabled"):
             raise ValueError("Unknown setting")
         self.change(lambda state: state.__setitem__(key, bool(enabled)))
 
@@ -222,7 +224,7 @@ class CompanionStore:
 
     def claim(self, kind, now):
         """Reserve a request before the API call, so retries/restarts stay bounded."""
-        if kind not in ("reflection", "research"):
+        if kind not in ("reflection", "research", "video"):
             raise ValueError("Unknown job")
         def update(state):
             daily = self._daily(state, now)
@@ -234,11 +236,13 @@ class CompanionStore:
                 return None
             if kind == "research" and (not state["research_enabled"] or not state["research_topic"]):
                 return None
-            cap = 4 if kind == "reflection" else RESEARCH_DAILY_LIMIT
-            if daily[kind] >= cap:
+            if kind == 'video' and not state['video_learning_enabled']:
                 return None
-            daily[kind] += 1
-            state["next_" + kind + "_at"] = planned_time(now, 360 if kind == "research" else 60)
+            cap = 4 if kind == "reflection" else RESEARCH_DAILY_LIMIT
+            if daily.get(kind, 0) >= cap:
+                return None
+            daily[kind] = daily.get(kind, 0) + 1
+            state["next_" + kind + "_at"] = planned_time(now, 360 if kind in ('research', 'video') else 60)
             return deepcopy(state)
         return self.change(update)
 
@@ -305,20 +309,7 @@ class CompanionStore:
                     evidence=event, status='proposal',
                     technique=item.get('technique') if item.get('technique') in TECHNIQUES else ''))
             state['improvements'] = state['improvements'][-8:]
-            if not any(t['status'] in ('active', 'awaiting_feedback') for t in state['conversation_trials']):
-                tried = {t['proposal']['id'] for t in state['conversation_trials']}
-                declined = {t['technique'] for t in state['conversation_trials']
-                            if t['status'] in ('stopped', 'inconclusive')}
-                candidate = next((p for p in reversed(state['improvements'])
-                                  if p.get('technique') in TECHNIQUES and p['id'] not in tried
-                                  and p['technique'] not in declined
-                                  and p['technique'] != state['adopted_style']), None)
-                if candidate:
-                    before = state['pending'][-1] if state['pending'] else None
-                    state['conversation_trials'].append({'id': uuid4().hex, 'proposal': deepcopy(candidate),
-                        'technique': candidate['technique'], 'status': 'active', 'started_at': now,
-                        'samples': [], 'before': deepcopy(before), 'feedback': ''})
-                    state['conversation_trials'] = state['conversation_trials'][-12:]
+            self._start_conversation_trial(state, now)
             updates = result.get('explorations', [])
             if not isinstance(updates, list):
                 raise ValueError('Invalid explorations')
@@ -355,6 +346,23 @@ class CompanionStore:
     def conversation_style(self):
         return style_for_turn(self.snapshot())
 
+    @staticmethod
+    def _start_conversation_trial(state, now):
+        if not any(t['status'] in ('active', 'awaiting_feedback') for t in state['conversation_trials']):
+            tried = {t['proposal']['id'] for t in state['conversation_trials']}
+            declined = {t['technique'] for t in state['conversation_trials']
+                        if t['status'] in ('stopped', 'inconclusive')}
+            candidate = next((p for p in reversed(state['improvements'])
+                              if p.get('technique') in TECHNIQUES and p['id'] not in tried
+                              and p['technique'] not in declined
+                              and p['technique'] != state['adopted_style']), None)
+            if candidate:
+                before = state['pending'][-1] if state['pending'] else None
+                state['conversation_trials'].append({'id': uuid4().hex, 'proposal': deepcopy(candidate),
+                    'technique': candidate['technique'], 'status': 'active', 'started_at': now,
+                    'samples': [], 'before': deepcopy(before), 'feedback': ''})
+                state['conversation_trials'] = state['conversation_trials'][-12:]
+
     def evaluate_trial(self, trial_id, verdict, now=None):
         if verdict not in ('adopted', 'stopped', 'inconclusive'):
             raise ValueError('Unknown trial evaluation')
@@ -368,6 +376,40 @@ class CompanionStore:
             trial.update(status=verdict, feedback=verdict, ended_at=now)
             if verdict == 'adopted':
                 state['adopted_style'] = trial['technique']
+        self.change(update)
+
+    def note_video_status(self, message):
+        self.change(lambda state: state.update(video_status=text(message, 240)))
+
+    def save_video_candidate(self, candidate, status, now, note=None):
+        from .video_learning import canonical_video
+        url = canonical_video(candidate['url'])
+        if not url:
+            raise ValueError('Invalid video URL')
+        def update(state):
+            record = next((v for v in state['video_candidates'] if v['url'] == url), None)
+            if record is None:
+                record = {'url': url, 'title': text(candidate['title'], 160)}
+                state['video_candidates'].append(record)
+            record.update(status=status, at=now)
+            state['video_candidates'] = state['video_candidates'][-120:]
+            state['video_status'] = status
+            if not note or any(o['url'] == url for o in state['video_observations']):
+                return
+            observation = dict(deepcopy(note), id=uuid4().hex, url=url, title=record['title'], at=now)
+            state['video_observations'].append(observation)
+            state['video_observations'] = state['video_observations'][-40:]
+            if not note.get('preference') or note.get('technique') not in TECHNIQUES:
+                return
+            proposal = {'id': observation['id'], 'at': now, 'status': 'proposal', 'source_kind': 'caption_observation',
+                'observation': note['observation'], 'change': TECHNIQUES[note['technique']]['label'],
+                'prototype': note['prototype'], 'check': note['use_when'] + ' ／ 避ける場面：' + note['avoid_when'],
+                'technique': note['technique'], 'evidence': {'id': observation['id'],
+                    'summary': note['access'] + '\n' + note['observation'],
+                    'sources': [{'title': record['title'], 'url': url + '&t=' + str(int(note['at_seconds']))}]}}
+            state['improvements'].append(proposal)
+            state['improvements'] = state['improvements'][-8:]
+            self._start_conversation_trial(state, now)
         self.change(update)
 
     def reset_adopted_style(self):
@@ -452,6 +494,11 @@ class CompanionStore:
             "improvement_proposals": state["improvements"][-2:],
             "recent_noah_messages": state['outbox'][-3:],
         }
+        if any(word in query for word in ('字幕', '動画', '学ん', '会話の工夫')):
+            result['caption_learning'] = {
+                'status': state['video_status'], 'access': '字幕抜粋のみ。映像・音声は未確認。',
+                'observations': [{k: note[k] for k in ('title', 'url', 'at', 'at_seconds', 'observation', 'prototype', 'access')}
+                                 for note in state['video_observations'][-2:]]}
         findings = [f for f in state["findings"] if not f["shared"]] if initiative else [
             f for f in state["findings"] if f["topic"] in query or any(
                 word in query for word in ("調べた", "リサーチ", "最近の興味", "何か発見")

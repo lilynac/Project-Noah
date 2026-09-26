@@ -177,6 +177,15 @@ class CompanionLife:
                 self.store.note_error("振り返り")
             # One request per tick; allow user activity to interrupt before search.
             return
+        batch = self.store.claim('video', now)
+        if batch:
+            try:
+                from .video_learning import run_research
+                run_research(self.store, self.client, batch, self.clock,
+                             lambda: bool(stop_event and stop_event.is_set()) or self.busy())
+            except Exception:
+                self.store.note_video_status('動画候補の調査に失敗。次の予定で再試行する。')
+            return
         batch = self.store.claim("research", now)
         if batch:
             try:

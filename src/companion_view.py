@@ -41,6 +41,21 @@ def journal_html(state):
         when = date_label(state['next_' + key + '_at']) if state[enabled] else 'お休み中'
         parts.append('<p>' + label + ' · ' + when + '</p>')
     parts.append('<p>予定は目安。会話中や作業中は待つこともあるよ。</p>')
+    parts.append('<h3>動画の会話から学ぶ</h3>')
+    when = date_label(state.get('next_video_at', 0)) if state.get('video_learning_enabled') else 'お休み中'
+    parts.append('<p>次の字幕リサーチ：' + when + '<br>' + escape(state.get('video_status', '')) + '</p>')
+    parts.append('<p>字幕の抜粋を読む段階。映像・声色・表情はまだ見聞きしていないよ。</p>')
+    for note in reversed(state.get('video_observations', [])[-6:]):
+        url = note['url'] + '&t=' + str(int(note['at_seconds']))
+        parts.append('<p><b>' + safe_link(url, note['title']) + '</b><br>' + escape(note['observation'])
+                     + '<br>合いそうな理由（仮説）：' + escape(note['fit_reason'])
+                     + '<br>試作品：' + escape(note['prototype'])
+                     + '<br>試す場面：' + escape(note['use_when']) + '<br>避ける場面：' + escape(note['avoid_when'])
+                     + '<br>' + escape(note['access']) + '</p>')
+        if not note.get('preference'):
+            parts.append('<p>あなたの好みとのつながりは未確認。観察のみ保存。</p>')
+    for candidate in reversed(state.get('video_candidates', [])[-6:]):
+        parts.append('<p>' + safe_link(candidate['url'], candidate['title']) + ' · ' + escape(candidate['status']) + '</p>')
     quality = state.get('last_quality', {})
     if quality.get('reason') in QUALITY_LABELS and quality['reason'] != 'approved':
         parts.append('<p>' + escape(QUALITY_LABELS[quality['reason']]) + ' · ' + date_label(quality['at']) + '</p>')
@@ -131,6 +146,12 @@ class CompanionDialog(QDialog):
         self.talk.toggled.connect(lambda value: self.change_setting('talk_enabled', value))
         layout.addWidget(self.research)
         layout.addWidget(self.talk)
+        self.video = QCheckBox('VTuberの会話を字幕から学ぶ（1日最大2回・各3本まで）')
+        self.video.toggled.connect(lambda value: self.change_setting('video_learning_enabled', value))
+        layout.addWidget(self.video)
+        self.video_now = QPushButton('字幕リサーチを次の確認で行う')
+        self.video_now.clicked.connect(self.request_video_research)
+        layout.addWidget(self.video_now)
         self.content = QTextBrowser()
         self.content.setOpenExternalLinks(True)
         layout.addWidget(self.content)
@@ -166,6 +187,14 @@ class CompanionDialog(QDialog):
         else:
             self.refresh()
 
+    def request_video_research(self):
+        try:
+            self.store.change(lambda state: state.update(next_video_at=0,
+                video_status='実行待ち。会話中・静穏時間・日次上限では待つよ。'))
+            self.refresh()
+        except (OSError, ValueError):
+            self.content.setPlainText('調査予定を保存できませんでした。')
+
     def clear_style(self):
         try:
             self.store.reset_adopted_style()
@@ -198,7 +227,8 @@ class CompanionDialog(QDialog):
         for verdict, button in self.trial_buttons.items():
             button.setEnabled(trial is not None and (verdict != 'adopted' or bool(trial['samples'])))
         self.reset_style.setVisible(state.get('adopted_style') in TECHNIQUES)
-        for checkbox, key in ((self.research, 'research_enabled'), (self.talk, 'talk_enabled')):
+        self.video_now.setEnabled(state.get('video_learning_enabled', False))
+        for checkbox, key in ((self.research, 'research_enabled'), (self.talk, 'talk_enabled'), (self.video, 'video_learning_enabled')):
             checkbox.blockSignals(True)
             checkbox.setChecked(state[key])
             checkbox.blockSignals(False)
