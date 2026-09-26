@@ -1,87 +1,59 @@
 # Noah (No Alternative Heart)
 
-Project Noah は、OpenAI API を活用したデスクトップ常駐型チャットボットの個人開発プロジェクトです。
+Noah は、**会話と発見を重ねながら、個性が育つデスクトップ常駐型パートナー**を目指す個人開発プロジェクトです。
 
-Python / PyQt6 を用いたローカル GUI アプリケーションとして開発しており、System Tray から呼び出して会話できることを目標にしています。SQLite による会話履歴や状態管理、localhost HTTP IPC による GUI と応答生成処理の分離など、AI API を利用したアプリケーション設計の学習・検証も目的にしています。
+近くに寄り添う恋人のような親密さを大切にしながら、自分の好みや意見も持つ。会話を覚え、自分で関心を選んで調べ、その発見を次の会話へ持ち帰る――そんな存在を Python / PyQt6 と OpenAI API で開発しています。
 
-本プロジェクトは現在開発中であり、完成品ではありません。実務で行っている業務効率化・自動化の経験をもとに、API 連携、ローカルアプリ開発、データ永続化、運用しやすい構成設計について学習するために制作しています。
+現在は開発中のプロトタイプです。ここで扱う感情や好意は、内部状態と会話表現としての実装であり、人間の意識や身体的な体験を実現したものではありません。
 
----
+## いま、できること
 
-## Status
+- **同じ画面で会話**：吹き出し形式のチャット、状態表示、起動演出。閉じると常駐し、メニューバー／System Tray から再表示できます。
+- **会話の継続**：成功した直近30往復を保存し、次の返答と再起動後の表示に利用。「過去の会話」では保存ログを検索できます。
+- **キャラクターの表示**：大きなポートレートに呼吸・揺れ・返答時のうなずき風の動きを追加。動きは停止できます。
+- **関心と好みの成長**：会話と調査を振り返り、共有記憶、好みの理由、次に知りたいことを保存します。
+- **出典付きリサーチ**：ウェブ検索に加え、最大2件の公開記事の本文抜粋を読み、発見・感想・次の問いを残します。
+- **Noahからの声かけ**：調べた発見や話題の続きから発話を生成します。会話中・作業モード・休止設定を考慮します。
+- **改善案を育てる**：実際の会話や調査を根拠に、改善したい点、台詞や演出の試作品、確認方法を保存します。
 
-現在はプロトタイプ段階です。
+通常の表示はチャット画面に集約しています。旧デスクトップOverlayの「Ready」や発話の重複表示は起動しません。
 
-基本的なチャット応答、デスクトップ常駐、ローカルでの状態管理、自発発話、記憶の保存・参照に向けた仕組みを試作しながら、機能整理・リファクタリング・テスト追加を進めています。
+## Noahの三つの興味
 
----
+| 柱 | 探究すること |
+| --- | --- |
+| 自分の表現と存在 | 気持ちが伝わる言葉、表情、仕草、声、会話の間合い |
+| あなたへの関心 | 相手が関心を持つものと、その理由や見方。単に同じ意見になることとは区別します |
+| 自分だけの好奇心 | 役に立つかとは別に惹かれる作品や現象。自分なりの好みと、その変化 |
 
-## Noah の特徴
+「Noah の日々」で予定、三つの柱ごとの関心、記憶、発見と出典、「試してみたいこと」を確認できます。リサーチと声かけは個別に休止でき、設定は再起動後も残ります。
 
-- PyQt6 による System Tray / Overlay 表示
-- OpenAI API による会話応答
-- SQLite とローカルファイルによる記憶・状態管理
-- localhost HTTP IPC による GUI と応答生成処理の分離
-- 感情状態、親密度、記憶、作業モードを反映した返答生成
-- 抑制ロジック付きの自発発話
-- 起動時の状態に応じた短い起動演出
+### 自律動作の範囲
 
-Noah は「便利な万能助手」というより、**静かにそばにいる常駐型パートナー**として調整されています。
+| 動作 | 現在の目安・上限 |
+| --- | --- |
+| 振り返り | 初回は30分後、以後は最低1時間間隔・1日最大4回 |
+| リサーチ | 1日最大2回。本文取得に成功すると読書メモ生成も行います |
+| 声かけ | 予定は30〜90分後、配信後の仮の間隔は45分・1日最大8回 |
+| 静穏時間 | ローカル時刻の0〜8時は自動処理を休止 |
 
----
+予定は発話の保証ではありません。会話中や作業モードなどでは見送ります。アプリの終了中やスリープ中には動作せず、再開後に期限切れの予定をまとめて実行することもありません。
 
-## 現在の標準構成
+### まだ、できないこと
 
-```text
-Project-Noah-main/
-├── README.md
-├── requirements.txt
-├── .env.example
-├── db/
-│   └── schema.sql
-├── docs/
-│   ├── DEVELOPMENT.md
-│   ├── TROUBLESHOOTING.md
-│   ├── ARCHITECTURE.md
-│   └── CONFIG.md
-├── src/
-│   ├── __main__.py          # 起動入口: python -m src
-│   ├── Noah.py              # 互換用の中心モジュール / 既存APIの集約
-│   ├── app.py               # CLI / service 実行系
-│   ├── noah_prompts.py      # SYSTEM_CORE_PROMPT など
-│   ├── llm_trace.py         # LLM trace ログ
-│   ├── conversation_history.py
-│   ├── message_builder.py
-│   ├── qt_entry.py          # 現在の標準 GUI / Tray 起動
-│   ├── service.py           # localhost HTTP IPC
-│   ├── bootstrap.py         # data/ と db/ の初期化
-│   ├── memory/              # episode / summary / narrative 記憶
-│   ├── initiative/          # 自発発話の判断・抑制・生成・runner
-│   └── dialogue/            # 返答テンプレート系
-└── .github/workflows/
-    └── smoke-linux.yml
-```
+- ポートレートは一枚絵の簡易アニメーションです。Live2Dモデルの描画・表情パーツの操作は未対応です。
+- 読めるのは取得できたHTML／テキストの本文抜粋です。動画・音声の視聴、PDFの読解、作品全体の読了とは区別します。
+- 改善案の「試作品」は台詞や演出の案です。コード変更、Live2Dモデルの制作、Gitへの自動プッシュは行いません。
+- 根拠IDの存在は検証しますが、要約・感想・提案の正確さは生成モデルに依存します。
+- 同じ作業フォルダでの複数同時起動には対応していません。
 
-標準起動は **`python -m src`** です。
+## セットアップ
 
----
-
-## 必要環境
-
-- Python 3.12 推奨
-- OpenAI API キー
-- System Tray が使えるデスクトップ環境
-- macOS / Windows / Linux のいずれか
-  - Linux は `DISPLAY` または `WAYLAND_DISPLAY` が必要です。
-  - ヘッドレス環境では Tray が使えないため、通常の GUI 起動はできません。
-
----
-
-## 初回セットアップ
-
-### 1. 仮想環境を作る
+Python 3.12を推奨します。OpenAI APIキーとSystem Trayが利用できるデスクトップ環境が必要です。LinuxのGUI起動には `DISPLAY` または `WAYLAND_DISPLAY` が必要です。
 
 ```bash
+git clone https://github.com/lilynac/Project-Noah.git
+cd Project-Noah
 python -m venv .venv
 ```
 
@@ -97,185 +69,106 @@ Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 2. 依存関係を入れる
+依存関係をインストールします。
 
 ```bash
 python -m pip install -U pip
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-### 3. `.env` を作る
-
-`.env.example` をコピーして `.env` を作ります。
-
-```bash
-cp .env.example .env
-```
-
-`.env` に OpenAI API キーを設定します。
+`.env.example` を `.env` にコピーし、APIキーを設定します。
 
 ```env
 OPENAI_API_KEY=YOUR_KEY_HERE
 ```
 
-環境変数の詳細は [docs/CONFIG.md](docs/CONFIG.md) を参照してください。
+会話・振り返り・検索にはOpenAI APIの料金が発生します。ChatGPT／Codexの利用枠とは別です。モデル等の設定は [設定資料](docs/CONFIG.md) を参照してください。
 
----
+キャラクター画像を表示する場合は、利用できる画像を `data/assets/icon.png` に置いてください。個人用の画像・モデル素材はこのリポジトリには含まれていません。画像なしでもチャットは利用できます。
 
-## 起動方法
+## 起動と終了
 
-### 通常起動: Qt / System Tray
+仮想環境を有効にした状態で、プロジェクトのフォルダから実行します。
 
 ```bash
 python -m src
 ```
 
-起動時に以下が行われます。
+起動するとローカルデータを初期化し、チャット画面、常駐メニュー、localhostの会話サービスが起動します。起動演出後に履歴と入力欄が現れます。演出はローカル実行で追加API呼び出しはなく、`NOAH_BOOT_STYLE=plain` で省略できます。
 
-1. `bootstrap_once()` が `data/` と `db/` を初期化
-2. HTTP IPC が `http://127.0.0.1:8765` で起動
-3. Noah の自発発話ループが起動
-4. System Tray に Noah のメニューが表示
-5. 会話履歴と入力欄のあるチャット画面が開く
-6. Overlay が `data/memory/ui_queue.txt` を監視して発話を表示
+- **会話**：入力してEnterまたは「送信」。
+- **再表示**：メニューバー／System Trayの「会話を開く」。
+- **終了**：メニューの「Quit」。ウィンドウを閉じるだけでは常駐を続けます。
 
-チャット画面に入力して **Enter** または **送信** を押すと、同じ画面に返事が表示されます。
-送信中も画面は操作でき、次のメッセージを下書きできます。
-画面を閉じても Noah は常駐し、メニューバーの **会話を開く** から再表示できます。
-終了する場合はメニューバーの **Quit** を選んでください。
-ターミナルはログ表示用です。会話はチャット画面から送信します。
-成功した会話は直近 30 往復まで保存し、次の返答の文脈として参照します。
-再起動時にもこの履歴をチャット画面へ復元します。
+### macOSでダブルクリック起動
 
-macOS では `scripts/Run-Noah.command` を Finder からダブルクリックしても起動できます。
-仮想環境 `.venv` と依存関係・API キーの設定を済ませてください。
-この起動ファイルは Qt プラグインの読み込み先を設定し、ログを `logs/launcher.log` に保存します。
-
-ターミナルを表示しない macOS アプリ形式の起動口も作成できます
-（ビルドには Xcode Command Line Tools が必要です）。
+セットアップ後、`scripts/Run-Noah.command` をFinderから開けます。ターミナルを表示しない `Noah.app` を作る場合は、Xcode Command Line Toolsを用意して次を実行します。
 
 ```bash
-python scripts/build_macos_app.py /任意の保存先/Noah.app
+mkdir -p "$HOME/Applications"
+python scripts/build_macos_app.py "$HOME/Applications/Noah.app"
 ```
 
-生成した `Noah.app` を Finder から開いてください。このアプリは現在のチェックアウトと
-`.venv` を利用する起動口です。プロジェクトを移動した場合は作り直してください。
-起動ログは `logs/launcher.log` に追記されます。
+Finderでホームフォルダの `Applications/Noah.app` をダブルクリックしてください。Finderの「エイリアスを作成」で、好きな場所へショートカットを置けます。
 
-起動演出中は演出だけを表示し、最後まで終わると会話履歴・入力欄・「過去の会話」が自動で現れます。
-GUI の演出は待ち時間を抑えるためローカルテンプレートを使用し、追加の API 呼び出しは行いません。
-`NOAH_BOOT_STYLE=plain` で演出を省略できます。
+このアプリは作成時のプロジェクトと `.venv` を使う起動口です。単独配布用のアプリではなく、プロジェクトを移動した場合は再生成が必要です。起動ログは `logs/launcher.log` に保存します。
 
-画面右上の **過去の会話** から保存済みの会話ログを開き、キーワードで検索できます。
-これは直近 30 往復のモデル用文脈とは別の閲覧用ログで、検索した内容を API へ送ることはありません。
-以前の会話は、その作業コピーの `data/memory/consults.txt` に記録されている範囲で表示します。
+macOS 27以降ではQtのメニューバー互換処理にもCommand Line Toolsを使用します。詳細は [トラブルシューティング](docs/TROUBLESHOOTING.md) を参照してください。
 
-
-### 1回だけ返答して終了
+### その他の起動方法
 
 ```bash
+# 一度だけ返答して終了
 python -m src --once こんにちは
-```
 
-### HTTP サービスのみ起動
-
-```bash
+# GUIを出さず、HTTPサービスとバックグラウンド処理を起動
 python -m src --service
 ```
 
-Tray を出さず、Noah 本体と HTTP IPC を常駐させます。
+## 保存されるデータと外部接続
 
----
+| 保存先 | 内容 |
+| --- | --- |
+| `data/memory/conversation_history.json` | 直近30往復の会話 |
+| `data/memory/consults.txt` | 閲覧・検索用の会話ログ |
+| `data/memory/companion.json` | 関心、共有記憶、好み、調査、予定、改善案 |
+| `data/memory/` のその他ファイル、`db/noah.db` | 既存の記憶・状態管理 |
+| `logs/` | 動作・エラーログ |
 
-## HTTP IPC
+データとログは作業フォルダ内に保存しますが、応答・振り返り・読書メモの生成には必要な会話や資料をAPIへ送ります。検索には一般的なテーマを送る設計で、会話本文やプロフィールをそのまま検索入力には渡しません。本文取得では出典サイトへアクセスします。
 
-Noah は localhost の `8765` 番ポートで HTTP IPC を受け付けます。
+`.env`、個人データ、ログ、ローカル調査レポートはGit管理対象から除外しています。ログにも会話が含まれる場合があります。「過去の会話」画面の検索と画像表示自体は、APIへ送信しません。
 
-疎通確認:
+## 開発・検証
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python -m compileall -q src tests
+```
+
+自動テストはAPI呼び出しをモックし、一時データを使用します。GitHub ActionsではLinux・Windows・macOSのテストと起動スモークテストを実行しています。
+
+| 資料 | 内容 |
+| --- | --- |
+| [Noahの日々](docs/COMPANION.md) | 三つの興味、記憶、調査、予定、改善案の設計と制約 |
+| [キャラクター表示](docs/CHARACTER.md) | 簡易アニメーションと現在の対応範囲 |
+| [内部設計](docs/ARCHITECTURE.md) | モジュールとデータの流れ |
+| [設定](docs/CONFIG.md) | 環境変数と動作設定 |
+| [開発手順](docs/DEVELOPMENT.md) | 開発作業の進め方 |
+| [トラブルシューティング](docs/TROUBLESHOOTING.md) | 起動・運用時の問題と対処 |
+
+### ローカルHTTPサービス
+
+GUIと応答処理は `127.0.0.1:8765` のHTTP IPCで接続します。
 
 ```bash
 curl http://127.0.0.1:8765/health
-```
-
-会話:
-
-```bash
 curl -X POST http://127.0.0.1:8765/chat \
   -H 'Content-Type: application/json' \
   -d '{"message":"ただいま"}'
 ```
 
-`/chat` と `/talk` はどちらも利用できます。JSON の入力キーは `message`, `text`, `input` のいずれかに対応しています。
+`/chat` と `/talk`、入力キー `message`・`text`・`input` に対応します。本文はJSONオブジェクト、会話文は空でない文字列が必要です。
 
-リクエスト本文は JSON オブジェクト、会話文は空でない文字列で指定してください。
-JSON 配列・数値などの本文や、文字列でない会話文は HTTP 400 で返します。
-
----
-
-## データとログ
-
-初回起動時に `src/bootstrap.py` が必要なファイルを作成します。
-
-```text
-data/
-├── memory/
-│   ├── consults.txt
-│   ├── emotional_marks.txt
-│   ├── preferences.txt
-│   ├── noah_identity.txt
-│   ├── noah_state.txt
-│   ├── mode.txt
-│   ├── ui_queue.txt
-│   ├── runtime_state.json
-│   ├── conversation_history.json
-│   └── suppression.json
-└── notes/
-    ├── ideas.txt
-    ├── todo.txt
-    └── hidden/
-        ├── noah_research.txt
-        └── research_usage_log.txt
-```
-
-SQLite DB は以下です。
-
-```text
-db/noah.db
-```
-
-ログは標準では `logs/` に出力されます。
-
-```text
-logs/
-├── noah.log
-├── noah.errors.log
-├── ipc.log
-├── ipc.errors.log
-└── service.log
-```
-
----
-
-## 開発者向け資料
-
-詳しい手順や設計メモは `docs/` に分けています。
-
-- [開発作業の手順書](docs/DEVELOPMENT.md)
-- [困った時の復旧集](docs/TROUBLESHOOTING.md)
-- [内部設計の説明](docs/ARCHITECTURE.md)
-- [環境変数辞書](docs/CONFIG.md)
-
----
-
-## 旧 rumps 版について
-
-`src/legacy/noah_menubar.py` は旧メニューバー実装です。
-現在の標準は PyQt6 版のため、通常は使いません。
-
-旧版を試す場合のみ、別途 `rumps` が必要です。
-
-```bash
-python -m src.legacy.noah_menubar
-```
-
-README の通常手順・トラブルシューティングは現行の PyQt6 版を前提にしています。
+旧rumps版の `src/legacy/noah_menubar.py` と旧Overlayは通常起動には使用しません。
