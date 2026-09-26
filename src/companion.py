@@ -61,7 +61,7 @@ def initial_state():
         "version": 1, "seeded": False, "turn_count": 0, "talk_pace": "normal",
         "affection": 0.25, "trust": 0.30,
         "pending": [], "memories": [], "preferences": [], "interests": [],
-        "improvements": [], "pillars_seeded": False,
+        "improvements": [], "pillars_seeded": False, "research_threads": [],
         "findings": [], "outbox": [], "research_enabled": True, "talk_enabled": True,
         "next_reflection_at": 0, "next_research_at": 0, "next_talk_at": 0,
         "research_topic": "", "plan_reason": "会話の中から、気になることを見つけていく。",
@@ -109,7 +109,7 @@ class CompanionStore:
             for key, value in state.items():
                 if type(value) in (int, float) and (not math.isfinite(value) or value < 0):
                     raise ValueError("Invalid companion number: " + key)
-            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements"):
+            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads"):
                 if not all(isinstance(item, dict) for item in state[key]):
                     raise ValueError("Invalid companion records: " + key)
         return state
@@ -296,6 +296,23 @@ class CompanionStore:
                 state['improvements'].append(dict(proposal, id=uuid4().hex, at=now,
                     evidence=event, status='proposal'))
             state['improvements'] = state['improvements'][-8:]
+            updates = result.get('explorations', [])
+            if not isinstance(updates, list):
+                raise ValueError('Invalid explorations')
+            eligible = {f['id']: f for f in batch['findings'][-2:]}
+            for item in updates[:2]:
+                if not isinstance(item, dict) or item.get('finding_id') not in eligible:
+                    continue
+                finding = eligible[item['finding_id']]
+                values = {key: text(item.get(key), 400) for key in ('learned', 'open_question', 'next_reading', 'changed_view')}
+                if not values['learned'] or not values['open_question'] or not values['next_reading']:
+                    continue
+                for trail in state['research_threads']:
+                    for step in trail['steps']:
+                        if step['finding_id'] == finding['id']:
+                            # A reflection annotates a finding once, preserving its history.
+                            if 'learned' not in step:
+                                step.update(values)
             topic = text(result.get("research_topic"), 100)
             if topic and any(item["topic"] == topic for item in state["interests"]):
                 state["research_topic"] = topic
@@ -312,14 +329,32 @@ class CompanionStore:
             state["last_error"] = ""
         self.change(update)
 
+    def research_history(self, topic):
+        """Only public research records, never conversation or profile data."""
+        state = self.snapshot()
+        return research_history(state, topic)
+
     def save_finding(self, topic, summary, sources, now):
         if not summary.strip() or not sources:
             raise ValueError("Research must include source citations")
         def update(state):
-            state["findings"].append({"id": uuid4().hex, "topic": topic, "summary": summary,
+            finding_id = uuid4().hex
+            state["findings"].append({"id": finding_id, "topic": topic, "summary": summary,
                                       "sources": sources, "at": now, "shared": False,
                                       "pillar": next((interest_pillar(i) for i in state["interests"] if i["topic"] == topic), "curiosity")})
             state["findings"] = state["findings"][-12:]
+            trail = next((t for t in state['research_threads'] if t['topic'] == topic), None)
+            if trail is None:
+                trail = {'topic': topic, 'steps': [
+                    {'finding_id': f['id'], 'at': f['at'], 'summary': f['summary'], 'sources': deepcopy(f['sources'])}
+                    for f in state['findings'][:-1] if f['topic'] == topic][-3:]}
+            else:
+                state['research_threads'].remove(trail)
+            trail['steps'].append({'finding_id': finding_id, 'at': now, 'summary': summary,
+                                   'sources': deepcopy(sources)})
+            trail['steps'] = trail['steps'][-4:]
+            state['research_threads'].append(trail)
+            state['research_threads'] = state['research_threads'][-12:]
             state["last_error"] = ""
         self.change(update)
 
@@ -375,6 +410,7 @@ class CompanionStore:
         finding = findings[-1] if findings else None
         if finding:
             result["research"] = {k: finding[k] for k in ("topic", "summary", "sources", "at")}
+            result['research_progress'] = research_history(state, finding['topic'])
         return json.dumps(result, ensure_ascii=False), finding
 
 
@@ -382,3 +418,15 @@ def source_lines(finding):
     if not finding:
         return ""
     return "\n\n出典：\n" + "\n".join(s["title"] + "\n" + s["url"] for s in finding["sources"])
+
+
+def research_history(state, topic):
+    trail = next((t for t in state.get('research_threads', []) if t['topic'] == topic), None)
+    if trail:
+        records = trail['steps'][-3:]
+    else:
+        # Older stores have findings but no trails yet. Read without rewriting them.
+        records = [f for f in state['findings'] if f['topic'] == topic][-3:]
+    fields = ('at', 'summary', 'sources', 'learned', 'open_question', 'next_reading', 'changed_view')
+    return [{key: (text(r[key], 1600) if isinstance(r[key], str) else deepcopy(r[key]))
+             for key in fields if key in r} for r in records]

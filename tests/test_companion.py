@@ -358,3 +358,62 @@ def test_user_pillar_requires_user_evidence(store, now):
     result['interests'].append(dict(topic='架空の趣味', reason='推測', origin='noah', pillar='user'))
     store.apply_reflection(result, batch, now)
     assert not any(i['topic'] == '架空の趣味' for i in store.snapshot()['interests'])
+
+
+def test_research_continuity_persists_and_annotations_require_finding(store, now):
+    batch = prepare(store, now)
+    store.save_finding('恒星の色', '色と温度の関係。', [{'title': '星', 'url': 'https://example.org'}], now)
+    batch = store.snapshot()
+    result = reflection(batch['pending'][0]['id'])
+    note = dict(finding_id='invented', learned='色と温度に関係がある。',
+                open_question='大気の影響は。', next_reading='観測機関の大気補正の解説', changed_view='')
+    result['explorations'] = [note]
+    store.apply_reflection(result, batch, now + 1)
+    assert 'learned' not in store.research_history('恒星の色')[0]
+    note['finding_id'] = batch['findings'][0]['id']
+    store.apply_reflection(result, batch, now + 2)
+    history = CompanionStore(store.path).research_history('恒星の色')
+    assert history[0]['next_reading'] == note['next_reading']
+    assert history[0]['changed_view'] == ''
+    note['learned'] = '後から上書きしない。'
+    store.apply_reflection(result, batch, now + 3)
+    assert store.research_history('恒星の色')[0]['learned'] == '色と温度に関係がある。'
+    assert json.loads(store.context(query='恒星の色')[0])['research_progress'] == history
+
+
+def test_history_migrates_old_findings_and_is_bounded(store, now):
+    old = dict(id='old', topic='星', summary='古い調査', sources=[{'title': '資料', 'url': 'https://example.org'}], at=now, shared=False)
+    store.change(lambda state: state.update(findings=[old]))
+    assert store.research_history('星')[0]['summary'] == '古い調査'
+    store.save_finding('星', '新しい調査', old['sources'], now + 1)
+    assert [r['summary'] for r in store.research_history('星')] == ['古い調査', '新しい調査']
+    for n in range(6):
+        store.save_finding('星', str(n), old['sources'], now + n + 2)
+    assert len(store.snapshot()['research_threads'][0]['steps']) == 4
+    assert len(store.research_history('星')) == 3
+    assert store.research_history('別の関心') == []
+
+
+def test_research_request_contains_previous_public_findings_only():
+    client = Mock()
+    client.responses.create.return_value = api_response()
+    previous = [{'summary': '色と温度', 'open_question': '観測の補正', 'next_reading': '観測所の技術解説'}]
+    research(client, '恒星の色', previous)
+    payload = json.loads(client.responses.create.call_args.kwargs['input'][1]['content'])
+    assert payload == {'topic': '恒星の色', 'previous_research': previous}
+
+
+def test_worker_passes_topic_history_to_next_research(store, now, monkeypatch):
+    from src.companion import research_history
+    prepare(store, now)
+    sources = [{'title': '資料', 'url': 'https://example.org'}]
+    store.save_finding('恒星の色', '最初の調査', sources, now)
+    store.change(lambda s: s.update(research_topic='恒星の色', next_research_at=now,
+                                   next_reflection_at=now + 3600))
+    expected = research_history(store.snapshot(), '恒星の色')
+    search = Mock(return_value=('続きの発見', sources))
+    monkeypatch.setattr('src.companion_life.research', search)
+    client = Mock()
+    CompanionLife(store, client, clock=lambda: now).tick()
+    search.assert_called_once_with(client, '恒星の色', expected)
+    assert store.research_history('恒星の色')[-1]['summary'] == '続きの発見'

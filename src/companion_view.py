@@ -68,6 +68,21 @@ def journal_html(state):
     parts.extend('<p>' + escape(item['text']) + '</p>' for item in state['memories'])
     if not state['memories']:
         parts.append('<p>会話を重ねて、覚えておきたいことが増えていく。</p>')
+    parts.append('<h3>探究の続き</h3>')
+    for trail in reversed(state.get('research_threads', [])):
+        parts.append('<h4>' + escape(trail['topic']) + '</h4>')
+        for step in trail['steps'][-3:]:
+            parts.append('<p><b>' + date_label(step['at']) + '</b><br>')
+            if not step.get('learned'):
+                parts.append('調査結果を保存したよ。次の振り返りで続きを考える。</p>')
+                continue
+            for key, label in (('learned', 'わかったこと'), ('open_question', 'まだ気になること'),
+                               ('next_reading', '次に読むもの・調べる観点'), ('changed_view', '考えが変わったところ')):
+                if step.get(key):
+                    parts.append(escape(label) + '：' + escape(step[key]) + '<br>')
+            parts.append('出典：' + ' / '.join(safe_link(s['url'], s['title']) for s in step['sources']) + '</p>')
+    if not state.get('research_threads'):
+        parts.append('<p>調べたことから次の問いを見つけ、ここに続きを残していくね。</p>')
     parts.append('<h3>見つけたこと</h3>')
     for finding in reversed(state['findings']):
         parts.append('<p><b>' + escape(finding['topic']) + '</b> · ' + date_label(finding['at']) + '<br>'

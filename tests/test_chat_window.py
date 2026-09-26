@@ -304,3 +304,19 @@ def test_explicit_quit_accepts_close_instead_of_hiding_only(app):
     quitting = QCloseEvent()
     window.closeEvent(quitting)
     assert quitting.isAccepted()
+
+
+def test_research_progress_is_escaped_and_unread_is_labeled():
+    from src.companion import initial_state
+    from src.companion_view import journal_html
+    state = initial_state()
+    state['research_threads'] = [{'topic': '<topic>', 'steps': [
+        {'at': 1, 'learned': '<script>bad</script>', 'open_question': '未解決',
+         'next_reading': 'まだ読んでいない記事', 'changed_view': '',
+         'sources': [{'title': '資料', 'url': 'javascript:bad'}]},
+        {'at': 2, 'summary': '新しい調査', 'sources': []}]}]
+    html = journal_html(state)
+    assert '探究の続き' in html and 'まだ気になること' in html
+    assert '<script>' not in html and '&lt;script&gt;' in html
+    assert 'href="javascript:' not in html
+    assert '次の振り返りで続きを考える' in html
