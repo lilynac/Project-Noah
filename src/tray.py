@@ -2,14 +2,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt6.QtGui import QIcon, QAction
-from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QInputDialog, QApplication
-from PyQt6.QtGui import QAction
-from PyQt6.QtCore import QObject
+from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 
 
 @dataclass
 class TrayDeps:
-    send_user_utterance: callable  # (text: str) -> None
+    open_chat: callable  # () -> None
     set_mode: callable             # (mode: str) -> None
     quit_app: callable             # () -> None
     icon: QIcon                    # ★ QIconを直接渡す（統一）
@@ -24,7 +22,7 @@ class TrayController:
         self.menu = QMenu()
 
         # Talk...
-        self.act_talk = QAction("Talk…", self.menu)
+        self.act_talk = QAction("会話を開く", self.menu)
         self.act_talk.triggered.connect(self.on_talk)
         self.menu.addAction(self.act_talk)
 
@@ -77,20 +75,4 @@ class TrayController:
             print(f"[WARN] set_mode failed: {e}")
 
     def on_talk(self):
-        text, ok = QInputDialog.getText(
-            None,
-            "Noah",
-            "聞かせて。いまの気持ちを",
-        )
-        if not ok:
-            return
-
-        text = (text or "").strip()
-        if not text:
-            return
-
-        try:
-            if hasattr(self.deps, "send_user_utterance") and self.deps.send_user_utterance:
-                self.deps.send_user_utterance(text)
-        except Exception as e:
-            print(f"[WARN] send_user_utterance failed: {e}")
+        self.deps.open_chat()

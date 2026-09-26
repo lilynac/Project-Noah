@@ -64,7 +64,7 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
             log_error("IPC_SEND", e, {"path": getattr(self, "path", None)})
             return
 
-    def _read_json(self) -> Dict[str, Any]:
+    def _read_json(self) -> Any:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except Exception as e:
@@ -119,13 +119,23 @@ class NoahIPCHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid json"})
                 return
 
+            if not isinstance(body, dict):
+                _SLOG.info("IPC_POST_400_INVALID_BODY path=%s ip=%s", path, ip)
+                self._send_json(400, {"error": "json body must be an object"})
+                return
+
             raw_msg = body.get("message")
             if raw_msg is None:
                 raw_msg = body.get("text")
             if raw_msg is None:
                 raw_msg = body.get("input")
 
-            message = normalize_input(str(raw_msg or ""))
+            if raw_msg is not None and not isinstance(raw_msg, str):
+                _SLOG.info("IPC_POST_400_INVALID_MESSAGE path=%s ip=%s", path, ip)
+                self._send_json(400, {"error": "message must be a string"})
+                return
+
+            message = normalize_input(raw_msg or "")
             if not message:
                 _SLOG.info("IPC_POST_400_EMPTY_MESSAGE path=%s ip=%s", path, ip)
                 self._send_json(400, {"error": "message is required"})

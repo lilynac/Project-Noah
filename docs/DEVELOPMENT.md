@@ -59,6 +59,23 @@ NOAH_BOOT_VERBOSE=1 NOAH_LOG_CONSOLE=1 python -m src
 
 ## 開発時の確認
 
+### 自動テスト（API キー不要）
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+感情モデル・応答文の整形・HTTP IPC の入力検証を確認します。
+PyQt6 がインストールされている場合はチャット画面の送信・エラー復旧・再表示も
+画面表示なしで検証します。未インストールの場合は GUI テストのみスキップします。IPC テストは
+応答生成を置き換えて一時的な localhost ポートを使うため、OpenAI API の呼び出しや
+個人の記憶ファイルの読み書きは行いません。テストだけなら `requirements.txt` の
+インストールは不要です。
+
+GitHub Actions の `tests` ワークフローでも、Python 3.12 を使って
+Linux / Windows / macOS でテストと構文チェックを実行します。
+
 ### Python 構文チェック
 
 macOS / Linux:
