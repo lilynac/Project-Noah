@@ -1,11 +1,13 @@
 """Qt playback and a two-voice audition panel."""
 import json
 import os
+import shutil
+import sys
 import tempfile
 from pathlib import Path
 from threading import Condition, Thread
 
-from PyQt6.QtCore import QObject, QUrl, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QLibraryInfo, QObject, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from .voice import NemoClient, VOICES, SAMPLE, speech_text
@@ -30,6 +32,19 @@ class VoiceController(QObject):
             pass
         executable = 'run.exe' if os.name == 'nt' else 'run'
         self.client = NemoClient(Path(root) / 'data/voice/nemo' / executable, Path(root) / 'logs/nemo.log')
+        # Qt may not enumerate plugins in a macOS synced Documents directory.
+        self._plugin_directory = None
+        if sys.platform == 'darwin':
+            plugin = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath)) / 'multimedia/libdarwinmediaplugin.dylib'
+            if plugin.is_file():
+                self._plugin_directory = tempfile.TemporaryDirectory(prefix='noah-media-')
+                target = Path(self._plugin_directory.name) / 'multimedia'
+                target.mkdir()
+                shutil.copyfile(plugin, target / plugin.name)
+                ffmpeg = plugin.with_name('libffmpegmediaplugin.dylib')
+                if ffmpeg.is_file():
+                    shutil.copyfile(ffmpeg, target / ffmpeg.name)
+                QCoreApplication.addLibraryPath(self._plugin_directory.name)
         self.player = QMediaPlayer(self)
         self.output = QAudioOutput(self)
         self.output.setVolume(.8)
@@ -125,6 +140,9 @@ class VoiceController(QObject):
             self.closed = True
             self.condition.notify_all()
         self.client.close()
+        if self._plugin_directory:
+            QCoreApplication.removeLibraryPath(self._plugin_directory.name)
+            self._plugin_directory.cleanup()
 
 
 class VoiceDialog(QDialog):
