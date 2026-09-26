@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from threading import Condition, Thread
 
-from PyQt6.QtCore import QCoreApplication, QLibraryInfo, QObject, QUrl, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QLibraryInfo, QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from .voice import NemoClient, VOICES, SAMPLE, speech_text
@@ -56,7 +56,9 @@ class VoiceController(QObject):
         self.devices.audioOutputsChanged.connect(self._devices_changed)
         self._select_output()
         self.player.setAudioOutput(self.output)
-        self.player.errorOccurred.connect(lambda *_: self.status_changed.emit('音声を再生できませんでした。'))
+        self._on_ready = None
+        self.player.errorOccurred.connect(self._playback_error)
+        self.player.playbackStateChanged.connect(self._playback_state)
         self.player.mediaStatusChanged.connect(self._media_status)
         self.ready.connect(self._play)
         self.failed.connect(self._failed)
@@ -95,17 +97,43 @@ class VoiceController(QObject):
         self._select_output()
         self.devices_changed.emit()
 
-    def speak(self, value, *, preview=False):
+    def speak(self, value, *, preview=False, on_ready=None):
         if self.closed or (not preview and not self.enabled):
+            if on_ready:
+                on_ready()
             return
         value = speech_text(value)
         if not value:
+            if on_ready:
+                on_ready()
             return
         self.stop()
+        self._on_ready = on_ready
+        token = self.token
+        if on_ready:
+            QTimer.singleShot(8000, lambda: self._presentation_timeout(token))
         with self.condition:
             self.pending = (self.token, value, self.voice)
             self.condition.notify()
         self.status_changed.emit('音声を準備しています…')
+
+    def _reveal(self):
+        callback, self._on_ready = self._on_ready, None
+        if callback:
+            callback()
+
+    def _presentation_timeout(self, token):
+        if token == self.token and self._on_ready:
+            self.stop()
+            self.status_changed.emit('音声の準備に時間がかかるため、文字で届けました。')
+
+    def _playback_state(self, state):
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self._reveal()
+
+    def _playback_error(self, *_):
+        self._reveal()
+        self.status_changed.emit('音声を再生できませんでした。')
 
     def _worker(self):
         while True:
@@ -130,12 +158,14 @@ class VoiceController(QObject):
 
     def _failed(self, token):
         if token == self.token:
+            self._reveal()
             self.status_changed.emit('Nemoに接続・合成できませんでした。エンジンの配置と起動ログを確認してください。')
 
     def _play(self, token, data):
         if self.closed or token != self.token:
             return
         if not self._select_output():
+            self._reveal()
             self.status_changed.emit('選択した出力先が見つかりません。接続または出力先を確認してください。')
             return
         self._clear_file()
@@ -158,6 +188,7 @@ class VoiceController(QObject):
             self.token += 1
             self.pending = None
         self._clear_file()
+        self._reveal()
         self.status_changed.emit('停止しました。')
 
     def shutdown(self):

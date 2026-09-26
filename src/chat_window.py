@@ -339,11 +339,9 @@ class ChatWindow(QWidget):
             messages = self._companion.snapshot()['outbox']
             for item in messages:
                 if item['id'] not in self._seen_initiatives:
-                    self._append('Noah', item['text'])
-                    self.character.set_state('reply')
                     self._seen_initiatives.add(item['id'])
-                    if self.voice:
-                        self.voice.speak(item['text'])
+                    self._finish_reply(item['text'], True)
+                    break
         except (OSError, ValueError, KeyError, TypeError):
             return
 
@@ -374,6 +372,8 @@ class ChatWindow(QWidget):
         if self._booting or self._pending or not text:
             return
         self._pending = True
+        if self.voice:
+            self.voice.stop()
         self._sent_text = text
         self.message_input.clear()
         self._update_send_button()
@@ -395,13 +395,22 @@ class ChatWindow(QWidget):
         Thread(target=worker, daemon=True).start()
 
     def _finish_reply(self, reply: str, ok: bool):
+        if ok and self.voice:
+            self._pending = True
+            self._update_send_button()
+            self.status.setText('言葉を整えています…')
+            self.presence.setText('考え中')
+            self.character.set_state('thinking')
+            self.voice.speak(reply, on_ready=lambda: self._show_reply(reply, True))
+            return
+        self._show_reply(reply, ok)
+
+    def _show_reply(self, reply: str, ok: bool):
         self._pending = False
         self.presence.setText("待機中" if ok else "送信エラー")
         self.character.set_state('reply' if ok else 'error')
         if ok:
             self._append("Noah", reply)
-            if self.voice:
-                self.voice.speak(reply)
             self.status.setText("聞いているよ。")
         else:
             self.status.setText("返事を受け取れませんでした。接続を確認して、もう一度送信してください。")

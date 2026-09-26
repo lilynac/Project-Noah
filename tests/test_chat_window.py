@@ -346,7 +346,11 @@ def test_voice_reads_new_replies_only_and_stops_on_quit(app):
     window = ChatWindow(lambda text: '新しい返答', [{'role': 'assistant', 'content': '過去の返答'}], voice=voice)
     voice.speak.assert_not_called()
     window._finish_reply('新しい返答', True)
-    voice.speak.assert_called_once_with('新しい返答')
+    assert voice.speak.call_args.args == ('新しい返答',)
+    assert window._pending
+    assert 'Noah\n新しい返答' not in window.transcript._messages
+    voice.speak.call_args.kwargs['on_ready']()
+    assert not window._pending
     window._sent_text = '入力'
     window._finish_reply('', False)
     assert voice.speak.call_count == 1
@@ -408,5 +412,40 @@ def test_voice_output_selection_persists_and_missing_device_blocks_playback(app,
         player.play.assert_not_called()
         assert '未接続' in dialog.output_choice.currentText()
         dialog.close()
+    finally:
+        controller.shutdown()
+
+
+@pytest.mark.parametrize('outcome', ['start', 'failure', 'stop', 'timeout', 'disabled'])
+def test_voice_reveals_text_once_on_playback_or_fallback(app, tmp_path, monkeypatch, outcome):
+    from unittest.mock import Mock
+    from src import voice_view
+    # Keep synthesis pending without network or races; exercise GUI callbacks.
+    monkeypatch.setattr(voice_view, 'Thread', Mock())
+    player = Mock()
+    monkeypatch.setattr(voice_view, 'QMediaPlayer', Mock(return_value=player))
+    monkeypatch.setattr(voice_view, 'QAudioOutput', Mock(return_value=Mock()))
+    monkeypatch.setattr(voice_view, 'NemoClient', Mock(return_value=Mock()))
+    controller = voice_view.VoiceController(tmp_path)
+    callback = Mock()
+    try:
+        if outcome == 'disabled':
+            controller.enabled = False
+        controller.speak('返答。', on_ready=callback)
+        token = controller.token
+        if outcome != 'disabled':
+            callback.assert_not_called()
+        if outcome == 'start':
+            controller._playback_state(voice_view.QMediaPlayer.PlaybackState.PlayingState)
+        elif outcome == 'failure':
+            controller._failed(token)
+        elif outcome == 'stop':
+            controller.stop()
+        elif outcome == 'timeout':
+            controller._presentation_timeout(token)
+            controller._play(token, b'RIFF0000WAVE')
+            player.play.assert_not_called()
+        controller.stop()
+        callback.assert_called_once_with()
     finally:
         controller.shutdown()

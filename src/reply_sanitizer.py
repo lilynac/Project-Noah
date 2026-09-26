@@ -15,6 +15,16 @@ def sanitize_reply_style(user_input: str, reply: str) -> str:
         return text
 
     user = (user_input or '').strip()
+    # Trim only unsolicited, sentence-final probing; preserve quoted questions,
+    # requested interviews and questions that are the whole response.
+    if not any(w in user for w in ('質問して', '質問を', 'インタビュー', '深掘りして', '掘り下げて', '物語', '台詞', 'セリフ', '翻訳', '訳して')):
+        parts = re.findall(r'[^。！？!?]+[。！？!?]?', text)
+        if len(parts) > 1:
+            last = parts[-1].strip()
+            probing = re.match(r'^(?:あなたは|あなたの|特に)?(?:どの|どんな|何が|何か|どう感じ|どう思)', last) and re.search(r'(?:かな|ですか|ますか|教えて(?:ね|ほしい)?)[。？?]?$', last)
+            invitation = re.match(r'^(?:もし|何か|よかったら)', last) and re.search(r'(?:聞かせて|教えて)(?:ね|ほしい|ほしいな)?[。！!]?$', last)
+            if probing or invitation:
+                text = ''.join(parts[:-1]).strip()
     is_greeting = user in {
         'こんばんは', 'こんばんは。', 'こんにちは', 'こんにちは。',
         'おはよう', 'おはよう。', 'おはよ', 'おはよ。',

@@ -15,3 +15,21 @@ def test_check_context_gets_concrete_fallback_when_vague():
     out = sanitize_reply_style("次は実際の会話で確認したい。", reply)
     assert "確認" in out
     assert "心に残る" not in out
+
+
+def test_trims_repeated_probing_but_keeps_substantive_answer():
+    assert sanitize_reply_style('絵作りかな', '絵の印象が残ったんだね。どんなシーンが特に気に入ったのかな。') == '絵の印象が残ったんだね。'
+    assert sanitize_reply_style('昔の感じ', '色の重ね方を想像したよ。どの部分が共通していると感じたのかな。') == '色の重ね方を想像したよ。'
+
+
+def test_preserves_requested_or_quoted_questions():
+    text = '一つずつ聞くね。どんな場面が好きなのかな。'
+    assert sanitize_reply_style('質問して', text) == text
+    quoted = '彼女は「どんな場面が好きなのかな」と尋ねた。'
+    assert sanitize_reply_style('続けて', quoted) == quoted
+    question = 'どんな場面が好きなのかな。'
+    assert sanitize_reply_style('作品の話', question) == question
+
+
+def test_trims_disguised_question_invitation():
+    assert sanitize_reply_style('知っている？', '確かな知識はないな。もし感想があれば、ぜひ聞かせてほしい。') == '確かな知識はないな。'
