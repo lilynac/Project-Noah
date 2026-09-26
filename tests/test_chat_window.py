@@ -338,3 +338,43 @@ def test_trial_evaluation_controls_persist_and_reset(app, tmp_path):
     dialog.reset_style.click()
     assert store.snapshot()['adopted_style'] == ''
     dialog.close()
+
+
+def test_voice_reads_new_replies_only_and_stops_on_quit(app):
+    from unittest.mock import Mock
+    voice = Mock()
+    window = ChatWindow(lambda text: '新しい返答', [{'role': 'assistant', 'content': '過去の返答'}], voice=voice)
+    voice.speak.assert_not_called()
+    window._finish_reply('新しい返答', True)
+    voice.speak.assert_called_once_with('新しい返答')
+    window._sent_text = '入力'
+    window._finish_reply('', False)
+    assert voice.speak.call_count == 1
+    window.prepare_shutdown()
+    voice.shutdown.assert_called_once()
+    window.close()
+
+
+def test_voice_settings_switch_and_stale_result_is_discarded(app, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from src import voice_view
+    player = Mock()
+    monkeypatch.setattr(voice_view, 'QMediaPlayer', Mock(return_value=player))
+    monkeypatch.setattr(voice_view, 'QAudioOutput', Mock(return_value=Mock()))
+    monkeypatch.setattr(voice_view, 'NemoClient', Mock(return_value=Mock()))
+    controller = voice_view.VoiceController(tmp_path)
+    try:
+        dialog = voice_view.VoiceDialog(controller)
+        old_token = controller.token
+        dialog.choice.setCurrentIndex(dialog.choice.findData('female6'))
+        assert controller.voice == 'female6'
+        controller._play(old_token, b'RIFF0000WAVE')
+        player.play.assert_not_called()
+        dialog.enabled.setChecked(False)
+        import json
+        assert json.loads(controller.path.read_text()) == {'voice':'female6','enabled':False}
+        controller.speak('ミュート中')
+        assert controller.pending is None
+        dialog.close()
+    finally:
+        controller.shutdown()

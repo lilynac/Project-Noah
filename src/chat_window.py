@@ -112,8 +112,10 @@ class ReplySignals(QObject):
 
 
 class ChatWindow(QWidget):
-    def __init__(self, send_message: Callable[[str], str], history=(), archive_loader=None, *, companion=None, portrait_path=None):
+    def __init__(self, send_message: Callable[[str], str], history=(), archive_loader=None, *, companion=None, portrait_path=None, voice=None):
         super().__init__()
+        self.voice = voice
+        self._voice_dialog = None
         self._send_message = send_message
         self._archive_loader = archive_loader
         self._history_dialog = None
@@ -178,6 +180,10 @@ class ChatWindow(QWidget):
         layout.addLayout(header)
         toolbar = QHBoxLayout()
         toolbar.addStretch()
+        self.voice_button = QPushButton('声')
+        self.voice_button.setEnabled(voice is not None)
+        self.voice_button.clicked.connect(self.open_voice)
+        toolbar.addWidget(self.voice_button)
         self.companion_button = QPushButton('Noah の日々')
         self.companion_button.setObjectName('historyButton')
         self.companion_button.setEnabled(companion is not None)
@@ -224,7 +230,7 @@ class ChatWindow(QWidget):
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        self._chat_widgets = (self.history_button, self.companion_button, self.transcript, self.status, composer, hint)
+        self._chat_widgets = (self.voice_button, self.history_button, self.companion_button, self.transcript, self.status, composer, hint)
         for item in history:
             if item.get("role") in ("user", "assistant") and isinstance(item.get("content"), str):
                 self._append("あなた" if item["role"] == "user" else "Noah", item["content"])
@@ -308,6 +314,15 @@ class ChatWindow(QWidget):
     def _append(self, speaker: str, text: str):
         self.transcript.append_message(speaker, text)
 
+    def open_voice(self):
+        if self.voice is None:
+            return
+        from .voice_view import VoiceDialog
+        if self._voice_dialog is None:
+            self._voice_dialog = VoiceDialog(self.voice, self)
+        self._voice_dialog.show()
+        self._voice_dialog.raise_()
+
     def open_companion(self):
         if self._booting or self._companion is None:
             return
@@ -327,6 +342,8 @@ class ChatWindow(QWidget):
                     self._append('Noah', item['text'])
                     self.character.set_state('reply')
                     self._seen_initiatives.add(item['id'])
+                    if self.voice:
+                        self.voice.speak(item['text'])
         except (OSError, ValueError, KeyError, TypeError):
             return
 
@@ -349,6 +366,8 @@ class ChatWindow(QWidget):
     def prepare_shutdown(self):
         """Allow QApplication.quit to close the window instead of hiding it."""
         self._quitting = True
+        if self.voice:
+            self.voice.shutdown()
 
     def send(self):
         text = self.message_input.text().strip()
@@ -381,6 +400,8 @@ class ChatWindow(QWidget):
         self.character.set_state('reply' if ok else 'error')
         if ok:
             self._append("Noah", reply)
+            if self.voice:
+                self.voice.speak(reply)
             self.status.setText("聞いているよ。")
         else:
             self.status.setText("返事を受け取れませんでした。接続を確認して、もう一度送信してください。")

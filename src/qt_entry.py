@@ -84,8 +84,11 @@ def main():
         path = Path(CONSULTS_PATH)
         text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
         return re.sub(r"^(\[[^\n]+\]) @\w+\s*$", r"\1", text, flags=re.MULTILINE)
+    from .voice_view import VoiceController
+    voice = VoiceController(Path(__file__).resolve().parents[1], app)
+    app.aboutToQuit.connect(voice.shutdown)
     chat = ChatWindow(lambda text: _post_chat(text, timeout=60.0), history, load_archive,
-                      companion=noah.companion, portrait_path=_resolve_icon_path())
+                      companion=noah.companion, portrait_path=_resolve_icon_path(), voice=voice)
 
     # ---- IPC サービス起動（/chat, /health）----
     server_thread = Thread(target=run_http_service, args=("127.0.0.1", 8765, stop_event))
