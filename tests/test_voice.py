@@ -22,6 +22,8 @@ def test_requested_voice_uses_discovered_style_id(tmp_path, key, name, style_id)
     assert query.kwargs['params'] == {'speaker':style_id,'text':'発見。'}
     assert synth.kwargs['params']['speaker'] == style_id
     assert synth.kwargs['payload']['speedScale'] == .95
+    assert synth.kwargs['payload']['outputSamplingRate'] == 44100
+    assert synth.kwargs['payload']['outputStereo'] is True
 
 
 def test_cancelled_synthesis_does_not_send_reply_text(tmp_path):

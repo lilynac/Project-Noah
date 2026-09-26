@@ -83,6 +83,9 @@ class NemoClient:
             return b''
         query = json.loads(self.request('/audio_query', params={'text': speech_text(value), 'speaker': style['id']}, post=True))
         query['speedScale'] = 0.95
+        # Low-rate mono playback can switch Bluetooth outputs into call mode.
+        query['outputSamplingRate'] = 44100
+        query['outputStereo'] = True
         if cancelled():
             return b''
         wav = self.request('/synthesis', params={'speaker': style['id']}, payload=query)
