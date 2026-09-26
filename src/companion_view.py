@@ -2,13 +2,14 @@
 from .companion import RESEARCH_DAILY_LIMIT, TALK_DAILY_LIMIT, INTEREST_PILLARS, interest_pillar
 
 from .initiative.quality import QUALITY_LABELS
+from .conversation_trials import TECHNIQUES, STATUS_LABELS, TRIAL_TURNS
 
 from datetime import datetime
 from html import escape
 from urllib.parse import urlsplit
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QCheckBox, QDialog, QLabel, QTextBrowser, QVBoxLayout
+from PyQt6.QtWidgets import QCheckBox, QDialog, QLabel, QTextBrowser, QVBoxLayout, QHBoxLayout, QPushButton
 
 
 def safe_link(url, title=None):
@@ -53,6 +54,23 @@ def journal_html(state):
             parts.append('<p><b>' + escape(item['topic']) + '</b><br>' + escape(item['reason']) + '</p>')
         if not items:
             parts.append('<p>会話の中から、関心の理由を少しずつ見つけていくね。</p>')
+    parts.append('<h3>会話の小さなお試し</h3>')
+    adopted = state.get('adopted_style', '')
+    if adopted in TECHNIQUES:
+        parts.append('<p>続けている工夫：' + escape(TECHNIQUES[adopted]['label']) + '</p>')
+    for trial in reversed(state.get('conversation_trials', [])[-3:]):
+        proposal = trial['proposal']
+        parts.append('<p><b>' + escape(TECHNIQUES[trial['technique']]['label']) + '</b> · '
+                     + escape(STATUS_LABELS[trial['status']]) + ' · '
+                     + str(len(trial['samples'])) + '/' + str(TRIAL_TURNS) + '返信<br>'
+                     + escape(proposal['observation']) + '<br>確かめたいこと：' + escape(proposal['check']) + '</p>')
+        before = trial.get('before')
+        if before:
+            parts.append('<p>開始前の返答（比較の参考）：<br>' + escape(before['noah']) + '</p>')
+        for sample in trial['samples']:
+            parts.append('<p>あなた：' + escape(sample['user']) + '<br>Noah：' + escape(sample['reply']) + '</p>')
+    parts.append('<p>会話の工夫は一度に一つ、成功した返信3回まで。返答がないことを評価にはしないよ。'
+                 '表示される前後の返答は話題が違うこともあり、効果を証明する比較ではないよ。</p>')
     parts.append('<h3>試してみたいこと</h3>')
     for item in reversed(state.get('improvements', [])):
         parts.append('<p><b>' + escape(item['change']) + '</b> · 提案<br>'
@@ -116,11 +134,45 @@ class CompanionDialog(QDialog):
         self.content = QTextBrowser()
         self.content.setOpenExternalLinks(True)
         layout.addWidget(self.content)
+        self.trial_note = QLabel()
+        self.trial_note.setWordWrap(True)
+        layout.addWidget(self.trial_note)
+        controls = QHBoxLayout()
+        self.trial_buttons = {}
+        for verdict, label in (('adopted', 'この返し方を続ける'), ('stopped', '元に戻す'),
+                               ('inconclusive', 'まだ判断できない')):
+            button = QPushButton(label)
+            button.clicked.connect(lambda checked=False, v=verdict: self.evaluate_trial(v))
+            self.trial_buttons[verdict] = button
+            controls.addWidget(button)
+        layout.addLayout(controls)
+        self.reset_style = QPushButton('採用した返し方を解除する')
+        self.reset_style.clicked.connect(self.clear_style)
+        layout.addWidget(self.reset_style)
+        self._trial_id = None
         self._last_html = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(10_000)
         self.refresh()
+
+    def evaluate_trial(self, verdict):
+        if not self._trial_id:
+            return
+        try:
+            self.store.evaluate_trial(self._trial_id, verdict)
+        except (OSError, ValueError):
+            self.trial_note.setText('評価を保存できませんでした。日々の画面を開き直してください。')
+        else:
+            self.refresh()
+
+    def clear_style(self):
+        try:
+            self.store.reset_adopted_style()
+        except (OSError, ValueError):
+            self.trial_note.setText('変更を保存できませんでした。')
+        else:
+            self.refresh()
 
     def change_setting(self, key, value):
         try:
@@ -137,6 +189,15 @@ class CompanionDialog(QDialog):
         except (OSError, ValueError, KeyError, TypeError):
             self.content.setPlainText('日々の記録を読み込めませんでした。元の記録はそのまま残しています。')
             return
+        trial = next((t for t in reversed(state.get('conversation_trials', []))
+                      if t['status'] in ('active', 'awaiting_feedback')), None)
+        self._trial_id = trial['id'] if trial else None
+        self.trial_note.setText((TECHNIQUES[trial['technique']]['label'] + '：'
+                                + STATUS_LABELS[trial['status']] + '。下のボタンで評価できます。')
+                               if trial else '次の振り返りで、根拠のある会話の工夫が見つかったら試すね。')
+        for verdict, button in self.trial_buttons.items():
+            button.setEnabled(trial is not None and (verdict != 'adopted' or bool(trial['samples'])))
+        self.reset_style.setVisible(state.get('adopted_style') in TECHNIQUES)
         for checkbox, key in ((self.research, 'research_enabled'), (self.talk, 'talk_enabled')):
             checkbox.blockSignals(True)
             checkbox.setChecked(state[key])

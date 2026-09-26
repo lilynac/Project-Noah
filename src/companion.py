@@ -16,6 +16,7 @@ from pathlib import Path
 from threading import RLock
 import time
 from uuid import uuid4
+from .conversation_trials import TECHNIQUES, TRIAL_TURNS, active_trial, style_for_turn
 
 
 RESEARCH_DAILY_LIMIT = 2
@@ -62,6 +63,7 @@ def initial_state():
         "affection": 0.25, "trust": 0.30,
         "pending": [], "memories": [], "preferences": [], "interests": [],
         "improvements": [], "pillars_seeded": False, "research_threads": [],
+        "conversation_trials": [], "adopted_style": "",
         "findings": [], "outbox": [], "research_enabled": True, "talk_enabled": True,
         "next_reflection_at": 0, "next_research_at": 0, "next_talk_at": 0,
         "research_topic": "", "plan_reason": "会話の中から、気になることを見つけていく。",
@@ -109,7 +111,7 @@ class CompanionStore:
             for key, value in state.items():
                 if type(value) in (int, float) and (not math.isfinite(value) or value < 0):
                     raise ValueError("Invalid companion number: " + key)
-            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads"):
+            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials"):
                 if not all(isinstance(item, dict) for item in state[key]):
                     raise ValueError("Invalid companion records: " + key)
         return state
@@ -181,7 +183,7 @@ class CompanionStore:
     def _experience(user, reply, now):
         return {"id": uuid4().hex, "at": now, "user": user, "noah": reply}
 
-    def record_turn(self, user, reply, now=None):
+    def record_turn(self, user, reply, now=None, *, trial_id=None):
         user, reply = text(user, 1500), text(reply, 1500)
         if not user or not reply:
             return
@@ -190,6 +192,12 @@ class CompanionStore:
             state["pending"].append(self._experience(user, reply, now))
             state["pending"] = state["pending"][-60:]
             state["turn_count"] += 1
+            trial = active_trial(state)
+            if trial and trial['id'] == trial_id:
+                trial['samples'].append({'user': user, 'reply': reply, 'at': now})
+                if len(trial['samples']) >= TRIAL_TURNS:
+                    trial['status'] = 'awaiting_feedback'
+                    trial['ended_at'] = now
             # Small continuity, never a penalty for absence or asking for space.
             warm = any(word in user for word in ("ありがとう", "いてくれて嬉しい", "会えて嬉しい"))
             state["trust"] = min(1.0, state["trust"] + (0.004 if warm else 0.001))
@@ -294,8 +302,23 @@ class CompanionStore:
                 if any(i['change'] == proposal['change'] for i in state['improvements']):
                     continue
                 state['improvements'].append(dict(proposal, id=uuid4().hex, at=now,
-                    evidence=event, status='proposal'))
+                    evidence=event, status='proposal',
+                    technique=item.get('technique') if item.get('technique') in TECHNIQUES else ''))
             state['improvements'] = state['improvements'][-8:]
+            if not any(t['status'] in ('active', 'awaiting_feedback') for t in state['conversation_trials']):
+                tried = {t['proposal']['id'] for t in state['conversation_trials']}
+                declined = {t['technique'] for t in state['conversation_trials']
+                            if t['status'] in ('stopped', 'inconclusive')}
+                candidate = next((p for p in reversed(state['improvements'])
+                                  if p.get('technique') in TECHNIQUES and p['id'] not in tried
+                                  and p['technique'] not in declined
+                                  and p['technique'] != state['adopted_style']), None)
+                if candidate:
+                    before = state['pending'][-1] if state['pending'] else None
+                    state['conversation_trials'].append({'id': uuid4().hex, 'proposal': deepcopy(candidate),
+                        'technique': candidate['technique'], 'status': 'active', 'started_at': now,
+                        'samples': [], 'before': deepcopy(before), 'feedback': ''})
+                    state['conversation_trials'] = state['conversation_trials'][-12:]
             updates = result.get('explorations', [])
             if not isinstance(updates, list):
                 raise ValueError('Invalid explorations')
@@ -328,6 +351,27 @@ class CompanionStore:
             state["last_reflected_at"] = now
             state["last_error"] = ""
         self.change(update)
+
+    def conversation_style(self):
+        return style_for_turn(self.snapshot())
+
+    def evaluate_trial(self, trial_id, verdict, now=None):
+        if verdict not in ('adopted', 'stopped', 'inconclusive'):
+            raise ValueError('Unknown trial evaluation')
+        now = time.time() if now is None else now
+        def update(state):
+            trial = next((t for t in state['conversation_trials'] if t['id'] == trial_id), None)
+            if not trial or trial['status'] not in ('active', 'awaiting_feedback'):
+                raise ValueError('Trial is no longer awaiting evaluation')
+            if verdict == 'adopted' and not trial['samples']:
+                raise ValueError('Try at least one reply before adoption')
+            trial.update(status=verdict, feedback=verdict, ended_at=now)
+            if verdict == 'adopted':
+                state['adopted_style'] = trial['technique']
+        self.change(update)
+
+    def reset_adopted_style(self):
+        self.change(lambda state: state.update(adopted_style=''))
 
     def research_history(self, topic):
         """Only public research records, never conversation or profile data."""

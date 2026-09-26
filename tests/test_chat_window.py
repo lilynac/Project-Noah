@@ -320,3 +320,21 @@ def test_research_progress_is_escaped_and_unread_is_labeled():
     assert '<script>' not in html and '&lt;script&gt;' in html
     assert 'href="javascript:' not in html
     assert '次の振り返りで続きを考える' in html
+
+
+def test_trial_evaluation_controls_persist_and_reset(app, tmp_path):
+    from src.companion_view import CompanionDialog
+    store = CompanionStore(tmp_path / 'state.json')
+    proposal = dict(change='具体を添える', observation='抽象的だった', check='特徴があるか', prototype='例', id='p')
+    store.change(lambda s: s.update(conversation_trials=[dict(id='t', proposal=proposal,
+        technique='concrete_detail', status='active', started_at=1, feedback='', samples=[], before=None)]))
+    dialog = CompanionDialog(store)
+    assert not dialog.trial_buttons['adopted'].isEnabled()
+    store.record_turn('話して', '特徴がある返答。', trial_id='t')
+    dialog.refresh()
+    dialog.trial_buttons['adopted'].click()
+    assert store.snapshot()['adopted_style'] == 'concrete_detail'
+    assert not dialog.trial_buttons['stopped'].isEnabled()
+    dialog.reset_style.click()
+    assert store.snapshot()['adopted_style'] == ''
+    dialog.close()

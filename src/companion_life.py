@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from .companion import waking_time, INTEREST_PILLARS, research_history
 from .research_reader import read_public_page
 from .noah_prompts import NOAH_CHARACTER_PROMPT
+from .conversation_trials import TECHNIQUES
 
 
 REFLECTION_PROMPT = NOAH_CHARACTER_PROMPT + "\n\n" + """
@@ -29,6 +30,8 @@ interestsは最大2つ。相手の関心とNoah自身の関心を区別し、Noa
 userは今回のユーザー発言のevidence_idが必須。他の柱は自分の関心を選べる。既存の関心の理由を変えるなら会話またはrecent_findingsのevidence_idを付ける。
 recent_findingsの柱が偏っていれば、他の柱の未探究の問いも検討する。機械的な順番より具体的な関心を優先する。
 improvementsは最大1件。会話または今回の調査に根拠があるときのみ、observation（気づいた課題）、change（改善したい点）、prototype（試したい具体的な台詞または仕草の演出案）、check（良くなったかの確認方法）、evidence_idを残す。
+会話の改善案のみtechniqueを選ぶ。concrete_detail（具体を一つ添える）、own_view（自分の見方と理由）、acknowledge_first（悩みを受け止めてから返す）。該当しない演出・機能の案は空文字。技法に合う課題の根拠がある場合だけ選び、無理に試行を作らない。
+conversation_trialsの明示的評価を参照し、中止された案を繰り返さない。返事がないことや日数の経過から評価を推測しない。
 思いつきの一般論や前と同じ案は出さない。コード変更や機能の実装完了を主張しない。根拠がなければ空配列。
 topicは検索可能な一般的なテーマにする。個人名、住所、勤務先、私的な会話の引用を含めない。
 explorationsはrecent_findingsの最大2件を対象に、finding_id、learned（今回わかった具体）、open_question（未解決の問い）、next_reading（次に読む資料の種類や具体的な調査観点）、changed_view（以前の考えから変化した点）を残す。
@@ -44,7 +47,7 @@ JSONだけを出力する。形式:
  "preferences":[{"text":"...","evidence_id":"..."}],
  "interests":[{"topic":"...","reason":"...","origin":"conversation または noah","pillar":"expression または user または curiosity","evidence_id":"..."}],
  "explorations":[{"finding_id":"...","learned":"...","open_question":"...","next_reading":"...","changed_view":""}],
- "improvements":[{"observation":"...","change":"...","prototype":"...","check":"...","evidence_id":"..."}],
+ "improvements":[{"observation":"...","change":"...","prototype":"...","check":"...","evidence_id":"...","technique":"concrete_detail / own_view / acknowledge_first または空文字"}],
  "research_topic":"...","research_in_minutes":180,"talk_in_minutes":45,"plan_reason":"..."}
 """.strip()
 
@@ -57,6 +60,9 @@ def reflect(client, state):
         "interest_pillars": INTEREST_PILLARS,
         "interests": state["interests"],
         "existing_improvements": state["improvements"][-3:],
+        "conversation_trials": [{'technique': t['technique'], 'status': t['status'],
+                                  'feedback': t['feedback'], 'change': t['proposal']['change']}
+                                 for t in state['conversation_trials'][-4:]],
         "recent_findings": state["findings"][-2:],
         "research_threads": [{"topic": t["topic"], "steps": research_history(state, t["topic"])} for t in state["research_threads"][-4:]],
         "recent_noah_messages": state['outbox'][-3:],
