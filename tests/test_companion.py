@@ -74,7 +74,7 @@ def test_reflection_requires_evidence_and_preserves_new_turns(store, now):
     assert len(state['memories']) == 1
     assert state['preferences'][0]['evidence']['user'] == '星を見るのが好き。'
     assert [item['user'] for item in state['pending']] == ['新しい話']
-    assert state['next_talk_at'] == now + 10 + 90 * 60
+    assert state['next_talk_at'] == now + 45 * 60  # Reflection cannot postpone an existing invitation.
     assert state['research_topic'] == '恒星の色'
 
 
@@ -417,3 +417,10 @@ def test_worker_passes_topic_history_to_next_research(store, now, monkeypatch):
     CompanionLife(store, client, clock=lambda: now).tick()
     search.assert_called_once_with(client, '恒星の色', expected)
     assert store.research_history('恒星の色')[-1]['summary'] == '続きの発見'
+
+
+def test_reflection_does_not_postpone_due_invitation(store, now):
+    batch = prepare(store, now)
+    store.change(lambda s: s.update(next_talk_at=now - 60))
+    store.apply_reflection(reflection(batch['pending'][0]['id']), batch, now)
+    assert store.talk_due(now)

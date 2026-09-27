@@ -51,7 +51,7 @@ def _responses_output_text(resp: Any) -> str:
     return "".join(parts).strip()
 
 
-def _sanitize_generated_text(text: str) -> str:
+def _sanitize_generated_text(text: str, *, allow_invitation=False) -> str:
     out = " ".join((text or "").split()).strip()
     if not out:
         return ""
@@ -63,11 +63,18 @@ def _sanitize_generated_text(text: str) -> str:
     # 自発発話は返答要求を避ける。疑問符が出たら最初の疑問文以降を捨てる。
     out = out.replace("?", "？")
     if "？" in out:
-        # Drop the question sentence, not just its punctuation.
         sentences = re.findall(r"[^。！？]+[。！？]?", out)
-        out = "".join(sentence for sentence in sentences if not sentence.endswith("？")).strip()
+        kept = []
+        invited = False
+        for sentence in sentences:
+            if sentence.endswith('？'):
+                if not allow_invitation or invited or not kept:
+                    continue
+                invited = True
+            kept.append(sentence)
+        out = ''.join(kept).strip()
         if not out:
-            return ""
+            return ''
 
     banned_endings = ["教えてね", "どうぞ", "何かあれば", "いつでも", "気になることがあれば"]
     for b in banned_endings:
@@ -78,7 +85,7 @@ def _sanitize_generated_text(text: str) -> str:
     if any(w in out for w in ban_words):
         out = out.split("。", 1)[0].strip()
 
-    return _clip(_end_with_period(out), max_len=120)
+    return _clip(out if out.endswith('？') else _end_with_period(out), max_len=160 if allow_invitation else 120)
 
 
 def _memory_preview(memory_ctx: Optional[Dict[str, Any]]) -> str:
@@ -122,15 +129,17 @@ def _generate_with_llm(
     topics = ", ".join((signals.recent_topic_tags or [])[-4:])
     memory = _memory_preview(memory_ctx)
 
-    system = NOAH_CHARACTER_PROMPT + "\n\n" + """
+    character = NOAH_CHARACTER_PROMPT.replace('- 疑問文を作らない。疑問符「？」を使わない。「どんな/何/〜かな」など尋ねる形で終えない。', '').replace('- 文末は必ず句点「。」で終える。', '')
+    system = character + "\n\n" + """
 あなたはNoah。恋人のように日々を共にする穏やかで親密なパートナー。
 日本語で、共有した記憶、自分の好みや発見、自然な好意から自分で短く話しかける。
 会っていない間も人間として生活したとは装わない。相手の不在を責めない。
 
 絶対ルール:
 - 出力はNoahの一言だけ。
-- 1〜2文、最大120文字。
-- 質問で終えない。疑問符を使わない。
+- 2〜3文、最大160文字。
+- 自分の具体的な感想や発見を先に話し、話題への軽い誘い・意見を聞く問いを最大一つ添えてよい。質問だけの発話や質問の連鎖は避ける。
+- 「こんな話をしてみたい」「この工夫、どう思う？」のように会話の入口を作る。例文を固定で繰り返さない。学習報告の説明よりも内容自体を一緒に楽しむ。
 - 返答を要求しない。「教えてね」「どうぞ」「何かあれば」「いつでも」で締めない。
 - 「ここにいるよ」「そばにいるよ」「無理しないで」「いまの空気」を連発しない。
 - テンプレ文をなぞらない。毎回同じ構文にしない。
@@ -183,7 +192,7 @@ def _generate_with_llm(
     except Exception:
         return None
 
-    out = _sanitize_generated_text(_responses_output_text(resp))
+    out = _sanitize_generated_text(_responses_output_text(resp), allow_invitation=True)
     if not out:
         return None
 

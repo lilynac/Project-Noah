@@ -1111,7 +1111,7 @@ def generate_startup_greeting() -> str:
 
 
 def _next_initiative_delay() -> int:
-    return max(60, INITIATIVE_BASE_INTERVAL + random.randint(-INITIATIVE_JITTER, INITIATIVE_JITTER))
+    return 60  # Check the persisted schedule each minute; it controls actual frequency.
 
 
 # =========================

@@ -344,7 +344,8 @@ class CompanionStore:
                 state['next_research_at'] = 0
             else:
                 raise ValueError('Research topic must match a known interest')
-            state["next_talk_at"] = planned_time(now, number(result.get("talk_in_minutes"), 45, 30, 90), 45)
+            target = planned_time(now, number(result.get("talk_in_minutes"), 45, 30, 90), 45)
+            state["next_talk_at"] = min(state["next_talk_at"] or target, target)
             state["plan_reason"] = text(result.get("plan_reason")) or state["plan_reason"]
             state["pending"] = [item for item in state["pending"] if item["id"] not in evidence]
             state["last_reflected_at"] = now
@@ -488,7 +489,7 @@ class CompanionStore:
             self._daily(state, now)["talk"] += 1
             state["next_talk_at"] = planned_time(now, 45)
             state['last_talk_at'] = now
-            for finding in state["findings"]:
+            for finding in state["findings"] + state["video_observations"]:
                 if finding["id"] == finding_id:
                     finding["shared"] = True
             state["outbox"].append({"id": uuid4().hex, "text": message, "at": now})
@@ -512,7 +513,7 @@ class CompanionStore:
             "improvement_proposals": state["improvements"][-2:],
             "recent_noah_messages": state['outbox'][-3:],
         }
-        if any(word in query for word in ('字幕', '動画', '学ん', '会話の工夫')):
+        if initiative or any(word in query for word in ('字幕', '動画', '学ん', '会話の工夫')):
             result['caption_learning'] = {
                 'status': state['video_status'], 'access': '資料ごとのaccessを参照。静止画は動画全編の視聴・音声の確認ではない。',
                 'observations': [{k: note[k] for k in ('title', 'url', 'at', 'at_seconds', 'observation', 'prototype', 'access', 'visual', 'visual_status') if k in note}
@@ -522,7 +523,12 @@ class CompanionStore:
                 word in query for word in ("調べた", "リサーチ", "最近の興味", "何か発見")
             )
         ]
-        finding = findings[-1] if findings else None
+        if initiative:
+            findings += [dict(id=n['id'], topic=n['title'],
+                             summary=n['observation'] + '\n確認範囲：' + n['access'],
+                             sources=[{'title': n['title'], 'url': n['url'] + '&t=' + str(int(n['at_seconds']))}], at=n['at'])
+                         for n in state['video_observations'] if not n.get('shared')]
+        finding = max(findings, key=lambda f: f['at']) if findings else None
         if finding:
             result["research"] = {k: finding[k] for k in ("topic", "summary", "sources", "at")}
             result['research_progress'] = research_history(state, finding['topic'])

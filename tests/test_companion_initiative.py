@@ -130,3 +130,19 @@ def test_quality_rejection_preserves_finding_and_delays_without_quota(tmp_path, 
     assert not saved['findings'][0]['shared']
     assert saved['next_talk_at'] == now + 3600
     assert saved['last_quality']['reason'] == ('unavailable' if failure == 'timeout' else failure)
+
+
+def test_invitation_after_specific_thought_survives():
+    from src.initiative.generation import _sanitize_generated_text
+    assert _sanitize_generated_text('この音の重ね方が好き。こんな話する？', allow_invitation=True) == 'この音の重ね方が好き。こんな話する？'
+    assert _sanitize_generated_text('どう思う？', allow_invitation=True) == ''
+    assert _sanitize_generated_text('この工夫が好き。どう思う？なぜ？', allow_invitation=True).count('？') == 1
+
+
+def test_unshared_caption_becomes_topic_and_is_marked_delivered(tmp_path):
+    store = CompanionStore(tmp_path / 'state.json')
+    store.change(lambda s:s.update(video_observations=[dict(id='note', title='制作の対談', url='https://www.youtube.com/watch?v=abcdefghijk', at=50, at_seconds=10, observation='音の重ね方を工夫している', access='字幕のみ')]))
+    context, finding = store.context(initiative=True)
+    assert finding['id'] == 'note' and '&t=10' in finding['sources'][0]['url']
+    store.delivered('この音の工夫が気になった。', finding['id'], now=100)
+    assert store.context(initiative=True)[1] is None
