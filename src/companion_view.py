@@ -44,7 +44,7 @@ def journal_html(state):
     parts.append('<h3>動画の会話から学ぶ</h3>')
     when = date_label(state.get('next_video_at', 0)) if state.get('video_learning_enabled') else 'お休み中'
     parts.append('<p>次の字幕リサーチ：' + when + '<br>' + escape(state.get('video_status', '')) + '</p>')
-    parts.append('<p>字幕の抜粋を読む段階。映像・声色・表情はまだ見聞きしていないよ。</p>')
+    parts.append('<p>字幕と、設定がONなら静止画を確認するよ。声色・連続した動き・全編の視聴は未対応。</p>')
     for note in reversed(state.get('video_observations', [])[-6:]):
         url = note['url'] + '&t=' + str(int(note['at_seconds']))
         parts.append('<p><b>' + safe_link(url, note['title']) + '</b><br>' + escape(note['observation'])
@@ -54,6 +54,15 @@ def journal_html(state):
                      + '<br>' + escape(note['access']) + '</p>')
         if not note.get('preference'):
             parts.append('<p>あなたの好みとのつながりは未確認。観察のみ保存。</p>')
+        if note.get('visual_status'):
+            parts.append('<p>映像の確認：' + escape(note['visual_status']) + '</p>')
+        visual = note.get('visual')
+        if visual:
+            parts.append('<p><b>静止画から気づいたこと</b><br>' + escape(visual['observation'])
+                         + '<br>表現の案（未実装）：' + escape(visual['expression_idea'])
+                         + '<br>分からないこと：' + escape(visual['limits'])
+                         + '<br>' + escape(visual['access']) + '<br>確認した時刻：'
+                         + ' / '.join(safe_link(note['url'] + '&t=' + str(int(f['at'])), str(f['at']) + '秒付近') for f in visual['frames']) + '</p>')
     for candidate in reversed(state.get('video_candidates', [])[-6:]):
         parts.append('<p>' + safe_link(candidate['url'], candidate['title']) + ' · ' + escape(candidate['status']) + '</p>')
     quality = state.get('last_quality', {})
@@ -149,6 +158,9 @@ class CompanionDialog(QDialog):
         self.video = QCheckBox('VTuberの会話を字幕から学ぶ（1日最大2回・各3本まで）')
         self.video.toggled.connect(lambda value: self.change_setting('video_learning_enabled', value))
         layout.addWidget(self.video)
+        self.visual = QCheckBox('映像の静止画も確認する（調査1回につき3枚・画像APIを利用）')
+        self.visual.toggled.connect(lambda value: self.change_setting('video_visual_enabled', value))
+        layout.addWidget(self.visual)
         self.video_now = QPushButton('字幕リサーチを次の確認で行う')
         self.video_now.clicked.connect(self.request_video_research)
         layout.addWidget(self.video_now)
@@ -228,7 +240,7 @@ class CompanionDialog(QDialog):
             button.setEnabled(trial is not None and (verdict != 'adopted' or bool(trial['samples'])))
         self.reset_style.setVisible(state.get('adopted_style') in TECHNIQUES)
         self.video_now.setEnabled(state.get('video_learning_enabled', False))
-        for checkbox, key in ((self.research, 'research_enabled'), (self.talk, 'talk_enabled'), (self.video, 'video_learning_enabled')):
+        for checkbox, key in ((self.research, 'research_enabled'), (self.talk, 'talk_enabled'), (self.video, 'video_learning_enabled'), (self.visual, 'video_visual_enabled')):
             checkbox.blockSignals(True)
             checkbox.setChecked(state[key])
             checkbox.blockSignals(False)

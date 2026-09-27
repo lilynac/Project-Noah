@@ -183,6 +183,9 @@ class CompanionLife:
                 from .video_learning import run_research
                 run_research(self.store, self.client, batch, self.clock,
                              lambda: bool(stop_event and stop_event.is_set()) or self.busy())
+                from .video_vision import run_visual_research
+                run_visual_research(self.store, self.client, self.clock,
+                                    lambda: bool(stop_event and stop_event.is_set()) or self.busy())
             except Exception:
                 self.store.note_video_status('動画候補の調査に失敗。次の予定で再試行する。')
             return

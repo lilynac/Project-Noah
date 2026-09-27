@@ -19,3 +19,4 @@ PyQt6==6.11.0
 PyQt6-Qt6==6.11.0
 
 yt-dlp==2026.8.19
+imageio-ffmpeg==0.6.0

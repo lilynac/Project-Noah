@@ -64,7 +64,7 @@ def initial_state():
         "pending": [], "memories": [], "preferences": [], "interests": [],
         "improvements": [], "pillars_seeded": False, "research_threads": [],
         "conversation_trials": [], "adopted_style": "",
-        "video_learning_enabled": False, "next_video_at": 0,
+        "video_learning_enabled": False, "video_visual_enabled": False, "next_video_at": 0,
         "video_candidates": [], "video_observations": [], "video_preferences": [], "video_status": "まだ調べていない。",
         "findings": [], "outbox": [], "research_enabled": True, "talk_enabled": True,
         "next_reflection_at": 0, "next_research_at": 0, "next_talk_at": 0,
@@ -211,7 +211,7 @@ class CompanionStore:
         self.change(update)
 
     def set_enabled(self, key, enabled):
-        if key not in ("research_enabled", "talk_enabled", "video_learning_enabled"):
+        if key not in ("research_enabled", "talk_enabled", "video_learning_enabled", "video_visual_enabled"):
             raise ValueError("Unknown setting")
         self.change(lambda state: state.__setitem__(key, bool(enabled)))
 
@@ -415,6 +415,16 @@ class CompanionStore:
     def reset_adopted_style(self):
         self.change(lambda state: state.update(adopted_style=''))
 
+    def save_video_visual(self, observation_id, status, visual, now):
+        def update(state):
+            note = next((n for n in state['video_observations'] if n['id'] == observation_id), None)
+            if note is None:
+                return
+            note.update(visual_status=text(status, 160), visual_at=now)
+            if visual:
+                note['visual'] = deepcopy(visual)
+        self.change(update)
+
     def research_history(self, topic):
         """Only public research records, never conversation or profile data."""
         state = self.snapshot()
@@ -496,8 +506,8 @@ class CompanionStore:
         }
         if any(word in query for word in ('字幕', '動画', '学ん', '会話の工夫')):
             result['caption_learning'] = {
-                'status': state['video_status'], 'access': '字幕抜粋のみ。映像・音声は未確認。',
-                'observations': [{k: note[k] for k in ('title', 'url', 'at', 'at_seconds', 'observation', 'prototype', 'access')}
+                'status': state['video_status'], 'access': '資料ごとのaccessを参照。静止画は動画全編の視聴・音声の確認ではない。',
+                'observations': [{k: note[k] for k in ('title', 'url', 'at', 'at_seconds', 'observation', 'prototype', 'access', 'visual', 'visual_status') if k in note}
                                  for note in state['video_observations'][-2:]]}
         findings = [f for f in state["findings"] if not f["shared"]] if initiative else [
             f for f in state["findings"] if f["topic"] in query or any(
