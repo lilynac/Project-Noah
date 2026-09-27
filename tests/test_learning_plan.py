@@ -63,3 +63,11 @@ def test_journal_shows_purpose_and_method():
     html = journal_html(s)
     assert 'わたしの学習計画' in html and '自然に会話するには' in html
     assert '今回の方法' in html and 'VTuber' not in html
+
+
+def test_planner_rejects_placeholder_judgments():
+    from src.learning_plan import valid_direction
+    assert not valid_direction({'goal':'conversation','method':'article','question':'具体的な問い','reason':'記録に基づく理由','check':'確かめ方'})
+    s = initial_state(); s['video_learning_enabled'] = True
+    s['learning_direction'] = {'goal':'expression','method':'article','question':'具体的な問い'}
+    assert choose_plan(s)['goal'] == 'conversation'

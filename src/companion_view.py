@@ -45,7 +45,11 @@ def journal_html(state):
         parts.append('<p>会話・振る舞いの学習はお休み中。</p>')
     for past in state.get('learning_history', [])[-3:]:
         parts.append('<p>' + escape(GOALS.get(past['goal'], past['goal'])) + ' · '
-                     + escape(METHODS.get(past['method'], past['method'])) + '<br>' + escape(past['status']) + '</p>')
+                     + escape(METHODS.get(past['method'], past['method']))
+                     + '<br>問い：' + escape(past.get('question', ''))
+                     + '<br>理由：' + escape(past.get('reason', ''))
+                     + '<br>確かめ方：' + escape(past.get('check', ''))
+                     + '<br>' + escape(past['status']) + '</p>')
     parts += ['<h3>興味の探求と、このあとの予定</h3>', '<p>' + escape(state['plan_reason']) + '</p>']
     for key, label, enabled in (("research", "気になることを調べる", "research_enabled"),
                                 ("talk", "あなたに話したい", "talk_enabled")):

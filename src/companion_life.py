@@ -49,6 +49,7 @@ JSONだけを出力する。形式:
  "interests":[{"topic":"...","reason":"...","origin":"conversation または noah","pillar":"expression または user または curiosity","evidence_id":"..."}],
  "explorations":[{"finding_id":"...","learned":"...","open_question":"...","next_reading":"...","changed_view":""}],
  "improvements":[{"observation":"...","change":"...","prototype":"...","check":"...","evidence_id":"...","technique":"concrete_detail / own_view / acknowledge_first または空文字"}],
+ "learning_direction":{"goal":"conversation または expression","method":"article または captions","question":"具体的な問い","reason":"記録に基づく理由","check":"確かめ方"},
  "research_topic":"...","research_in_minutes":180,"talk_in_minutes":45,"plan_reason":"..."}
 """.strip()
 

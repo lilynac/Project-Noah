@@ -5,6 +5,14 @@ TOPICS = {'conversation': '対談 インタビュー 聞き手 自分の感想 �
           'expression': 'キャラクター 表情 視線 個性 表現 制作 インタビュー'}
 
 
+def valid_direction(value):
+    if not isinstance(value, dict) or value.get('goal') not in GOALS or value.get('method') not in ('article', 'captions'):
+        return False
+    placeholders = {'具体的な問い', '記録に基づく理由', '確かめ方', '確認方法', '選ぶ理由', '...'}
+    return all(isinstance(value.get(k), str) and 8 <= len(value[k].strip()) <= 250
+               and value[k].strip() not in placeholders for k in ('question', 'reason', 'check'))
+
+
 def choose_plan(state):
     enabled = [g for g in GOALS if state.get('learn_' + g, True)]
     if not state.get('video_learning_enabled') or not enabled:
@@ -12,6 +20,8 @@ def choose_plan(state):
     history = state.get('learning_history', [])
     counts = {g: sum(p['goal'] == g for p in history) for g in enabled}
     suggestion = state.get('learning_direction', {})
+    if not valid_direction(suggestion):
+        suggestion = {}
     goal = suggestion.get('goal')
     if goal not in enabled:
         goal = min(enabled, key=lambda g: counts[g])

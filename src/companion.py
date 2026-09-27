@@ -329,7 +329,8 @@ class CompanionStore:
                             if 'learned' not in step:
                                 step.update(values)
             direction = result.get('learning_direction', {})
-            if isinstance(direction, dict) and direction.get('goal') in ('conversation', 'expression') and direction.get('method') in ('article', 'captions'):
+            from .learning_plan import valid_direction
+            if valid_direction(direction):
                 state['learning_direction'] = {k: direction[k] for k in ('goal', 'method')}
                 for key in ('question', 'reason', 'check'):
                     if text(direction.get(key), 250):
