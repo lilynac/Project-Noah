@@ -41,6 +41,7 @@ changed_viewは以前の記録がない、または考えが変わっていな�
 次に調べたいresearch_topicを既存または今回のinterestsから1つ選ぶ。調べないなら空文字。
 会話の続きや発見に応じて、調べるまでの時間を30〜1440分、話しかけるまでを30〜90分で選ぶ。
 毎回同じ時間に固定せず、話題が育っていなければ90分待ってよい。予定は実行の保証ではない。
+learning_directionでは、学習履歴と明示的な会話の好みから次の学習目的goal（conversation=自然な会話 / expression=自分らしい振る舞い）とmethod（article=公開記事 / captions=対談字幕）を選ぶ。VTuberは資料の一例であり固定の学習目標ではない。question（具体的な問い）、reason（選ぶ理由）、check（確かめ方）も短く書く。expressionではarticleを選ぶ。根拠がなければ省略してよい。
 plan_reasonは短い日本語で、自分がそのテーマと時間を選んだ理由を書く。
 JSONだけを出力する。形式:
 {"memories":[{"text":"...","evidence_id":"..."}],
@@ -58,6 +59,8 @@ def reflect(client, state):
         "memories": [{"text": m["text"]} for m in state["memories"]],
         "preferences": [{"text": m["text"]} for m in state["preferences"]],
         "interest_pillars": INTEREST_PILLARS,
+        "learning_history": state.get("learning_history", [])[-4:],
+        "conversation_preferences": state.get("video_preferences", []),
         "interests": state["interests"],
         "existing_improvements": state["improvements"][-3:],
         "conversation_trials": [{'technique': t['technique'], 'status': t['status'],
@@ -180,14 +183,11 @@ class CompanionLife:
         batch = self.store.claim('video', now)
         if batch:
             try:
-                from .video_learning import run_research
-                run_research(self.store, self.client, batch, self.clock,
-                             lambda: bool(stop_event and stop_event.is_set()) or self.busy())
-                from .video_vision import run_visual_research
-                run_visual_research(self.store, self.client, self.clock,
-                                    lambda: bool(stop_event and stop_event.is_set()) or self.busy())
+                from .learning_plan import run_plan
+                run_plan(self.store, self.client, batch, self.clock,
+                         lambda: bool(stop_event and stop_event.is_set()) or self.busy())
             except Exception:
-                self.store.note_video_status('動画候補の調査に失敗。次の予定で再試行する。')
+                self.store.note_video_status('学習計画の調査に失敗。次の予定で再試行する。')
             return
         batch = self.store.claim("research", now)
         if batch:

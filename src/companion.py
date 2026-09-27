@@ -65,6 +65,7 @@ def initial_state():
         "improvements": [], "pillars_seeded": False, "research_threads": [],
         "conversation_trials": [], "adopted_style": "",
         "video_learning_enabled": False, "video_visual_enabled": False, "next_video_at": 0,
+        "learn_conversation": True, "learn_expression": True, "learning_plan": {}, "learning_direction": {}, "learning_history": [],
         "video_candidates": [], "video_observations": [], "video_preferences": [], "video_status": "まだ調べていない。",
         "findings": [], "outbox": [], "research_enabled": True, "talk_enabled": True,
         "next_reflection_at": 0, "next_research_at": 0, "next_talk_at": 0,
@@ -113,7 +114,7 @@ class CompanionStore:
             for key, value in state.items():
                 if type(value) in (int, float) and (not math.isfinite(value) or value < 0):
                     raise ValueError("Invalid companion number: " + key)
-            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials", "video_candidates", "video_observations", "video_preferences"):
+            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials", "video_candidates", "video_observations", "video_preferences", "learning_history"):
                 if not all(isinstance(item, dict) for item in state[key]):
                     raise ValueError("Invalid companion records: " + key)
         return state
@@ -211,7 +212,7 @@ class CompanionStore:
         self.change(update)
 
     def set_enabled(self, key, enabled):
-        if key not in ("research_enabled", "talk_enabled", "video_learning_enabled", "video_visual_enabled"):
+        if key not in ("research_enabled", "talk_enabled", "video_learning_enabled", "video_visual_enabled", "learn_conversation", "learn_expression"):
             raise ValueError("Unknown setting")
         self.change(lambda state: state.__setitem__(key, bool(enabled)))
 
@@ -236,7 +237,7 @@ class CompanionStore:
                 return None
             if kind == "research" and (not state["research_enabled"] or not state["research_topic"]):
                 return None
-            if kind == 'video' and not state['video_learning_enabled']:
+            if kind == 'video' and (not state['video_learning_enabled'] or not (state['learn_conversation'] or state['learn_expression'])):
                 return None
             cap = 4 if kind == "reflection" else RESEARCH_DAILY_LIMIT
             if daily.get(kind, 0) >= cap:
@@ -327,6 +328,12 @@ class CompanionStore:
                             # A reflection annotates a finding once, preserving its history.
                             if 'learned' not in step:
                                 step.update(values)
+            direction = result.get('learning_direction', {})
+            if isinstance(direction, dict) and direction.get('goal') in ('conversation', 'expression') and direction.get('method') in ('article', 'captions'):
+                state['learning_direction'] = {k: direction[k] for k in ('goal', 'method')}
+                for key in ('question', 'reason', 'check'):
+                    if text(direction.get(key), 250):
+                        state['learning_direction'][key] = text(direction.get(key), 250)
             topic = text(result.get("research_topic"), 100)
             if topic and any(item["topic"] == topic for item in state["interests"]):
                 state["research_topic"] = topic

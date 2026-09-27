@@ -9,7 +9,7 @@ from html import escape
 from urllib.parse import urlsplit
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QCheckBox, QDialog, QLabel, QTextBrowser, QVBoxLayout, QHBoxLayout, QPushButton
+from PyQt6.QtWidgets import QCheckBox, QDialog, QLabel, QTextBrowser, QVBoxLayout, QHBoxLayout, QPushButton, QWidget
 
 
 def safe_link(url, title=None):
@@ -33,7 +33,20 @@ def date_label(timestamp):
 
 
 def journal_html(state):
-    parts = ['<h3>このあとの予定</h3>', '<p>' + escape(state['plan_reason']) + '</p>']
+    from .learning_plan import choose_plan, GOALS, METHODS
+    plan = state.get('learning_plan') if state.get('learning_plan', {}).get('status') == '調査中' else choose_plan(state)
+    parts = ['<h3>わたしの学習計画</h3>']
+    if plan:
+        parts.append('<p><b>' + escape(GOALS[plan['goal']]) + '</b><br>' + escape(plan['question'])
+                     + '<br>理由：' + escape(plan['reason']) + '<br>今回の方法：' + escape(METHODS[plan['method']])
+                     + '<br>確かめ方：' + escape(plan['check'])
+                     + '<br>予定：' + date_label(state.get('next_video_at', 0)) + '</p>')
+    else:
+        parts.append('<p>会話・振る舞いの学習はお休み中。</p>')
+    for past in state.get('learning_history', [])[-3:]:
+        parts.append('<p>' + escape(GOALS.get(past['goal'], past['goal'])) + ' · '
+                     + escape(METHODS.get(past['method'], past['method'])) + '<br>' + escape(past['status']) + '</p>')
+    parts += ['<h3>興味の探求と、このあとの予定</h3>', '<p>' + escape(state['plan_reason']) + '</p>']
     for key, label, enabled in (("research", "気になることを調べる", "research_enabled"),
                                 ("talk", "あなたに話したい", "talk_enabled")):
         if key == 'research' and state['research_topic']:
@@ -41,10 +54,9 @@ def journal_html(state):
         when = date_label(state['next_' + key + '_at']) if state[enabled] else 'お休み中'
         parts.append('<p>' + label + ' · ' + when + '</p>')
     parts.append('<p>予定は目安。会話中や作業中は待つこともあるよ。</p>')
-    parts.append('<h3>動画の会話から学ぶ</h3>')
-    when = date_label(state.get('next_video_at', 0)) if state.get('video_learning_enabled') else 'お休み中'
-    parts.append('<p>次の字幕リサーチ：' + when + '<br>' + escape(state.get('video_status', '')) + '</p>')
-    parts.append('<p>字幕と、設定がONなら静止画を確認するよ。声色・連続した動き・全編の視聴は未対応。</p>')
+    parts.append('<h3>資料から気づいたこと</h3>')
+    parts.append('<p>' + escape(state.get('video_status', '')) + '</p>')
+    parts.append('<p>記事・字幕・静止画は目的に合わせて選ぶ資料だよ。声色・連続した動き・全編の視聴は未対応。</p>')
     for note in reversed(state.get('video_observations', [])[-6:]):
         url = note['url'] + '&t=' + str(int(note['at_seconds']))
         parts.append('<p><b>' + safe_link(url, note['title']) + '</b><br>' + escape(note['observation'])
@@ -149,19 +161,33 @@ class CompanionDialog(QDialog):
         note = QLabel('ふたりの会話と、わたしが見つけたもの。')
         note.setWordWrap(True)
         layout.addWidget(note)
-        self.research = QCheckBox(f'気になることを調べる（検索 API を利用・1日最大{RESEARCH_DAILY_LIMIT}回）')
+        self.conversation = QCheckBox('自然に会話するにはどうしたらよいか')
+        self.expression = QCheckBox('どう振る舞えば自分らしさが伝わるか')
+        self.conversation.toggled.connect(lambda value: self.change_setting('learn_conversation', value))
+        self.expression.toggled.connect(lambda value: self.change_setting('learn_expression', value))
+        layout.addWidget(self.conversation)
+        layout.addWidget(self.expression)
+        self.research = QCheckBox('自分やあなたが関心を持つことを探求する')
         self.talk = QCheckBox(f'Noah から話しかける（1日最大{TALK_DAILY_LIMIT}回）')
         self.research.toggled.connect(lambda value: self.change_setting('research_enabled', value))
         self.talk.toggled.connect(lambda value: self.change_setting('talk_enabled', value))
         layout.addWidget(self.research)
         layout.addWidget(self.talk)
-        self.video = QCheckBox('VTuberの会話を字幕から学ぶ（1日最大2回・各3本まで）')
+        details_toggle = QPushButton('学習の実行設定')
+        details_toggle.setCheckable(True)
+        layout.addWidget(details_toggle)
+        details = QWidget()
+        settings = QVBoxLayout(details)
+        details.setVisible(False)
+        details_toggle.toggled.connect(details.setVisible)
+        layout.addWidget(details)
+        self.video = QCheckBox('会話・振る舞いの学習調査を実行（1日最大2回）')
         self.video.toggled.connect(lambda value: self.change_setting('video_learning_enabled', value))
-        layout.addWidget(self.video)
+        settings.addWidget(self.video)
         self.visual = QCheckBox('映像の静止画も確認する（調査1回につき3枚・画像APIを利用）')
         self.visual.toggled.connect(lambda value: self.change_setting('video_visual_enabled', value))
-        layout.addWidget(self.visual)
-        self.video_now = QPushButton('字幕リサーチを次の確認で行う')
+        settings.addWidget(self.visual)
+        self.video_now = QPushButton('学習計画を次の確認で進める')
         self.video_now.clicked.connect(self.request_video_research)
         layout.addWidget(self.video_now)
         self.content = QTextBrowser()
@@ -239,8 +265,8 @@ class CompanionDialog(QDialog):
         for verdict, button in self.trial_buttons.items():
             button.setEnabled(trial is not None and (verdict != 'adopted' or bool(trial['samples'])))
         self.reset_style.setVisible(state.get('adopted_style') in TECHNIQUES)
-        self.video_now.setEnabled(state.get('video_learning_enabled', False))
-        for checkbox, key in ((self.research, 'research_enabled'), (self.talk, 'talk_enabled'), (self.video, 'video_learning_enabled'), (self.visual, 'video_visual_enabled')):
+        self.video_now.setEnabled(state.get('video_learning_enabled', False) and (state['learn_conversation'] or state['learn_expression']))
+        for checkbox, key in ((self.conversation, 'learn_conversation'), (self.expression, 'learn_expression'), (self.research, 'research_enabled'), (self.talk, 'talk_enabled'), (self.video, 'video_learning_enabled'), (self.visual, 'video_visual_enabled')):
             checkbox.blockSignals(True)
             checkbox.setChecked(state[key])
             checkbox.blockSignals(False)
