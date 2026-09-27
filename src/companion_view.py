@@ -36,6 +36,9 @@ def journal_html(state):
     from .learning_plan import choose_plan, GOALS, METHODS
     plan = state.get('learning_plan') if state.get('learning_plan', {}).get('status') == '調査中' else choose_plan(state)
     parts = ['<h3>わたしの学習計画</h3>']
+    focus = state.get('learning_focus', {})
+    if focus.get('key') == 'tsukino_mito' and focus.get('remaining', 0) > 0:
+        parts.append('<p>いまの重点テーマ：月ノ美兎さんの企画と話し方 · あと' + str(focus['remaining']) + '回の調査で振り返る</p>')
     if plan:
         parts.append('<p><b>' + escape(GOALS[plan['goal']]) + '</b><br>' + escape(plan['question'])
                      + '<br>理由：' + escape(plan['reason']) + '<br>今回の方法：' + escape(METHODS[plan['method']])

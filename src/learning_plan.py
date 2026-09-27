@@ -17,6 +17,10 @@ def choose_plan(state):
     enabled = [g for g in GOALS if state.get('learn_' + g, True)]
     if not state.get('video_learning_enabled') or not enabled:
         return {}
+    from .learning_focus import focus_plan
+    focused = focus_plan(state)
+    if focused:
+        return focused
     history = state.get('learning_history', [])
     counts = {g: sum(p['goal'] == g for p in history) for g in enabled}
     suggestion = state.get('learning_direction', {})
@@ -86,6 +90,9 @@ def run_plan(store, client, batch, now, cancelled=lambda: False):
         status = '調査に失敗。次の予定で方法を見直す。'
     record = {**plan, 'status': status, 'at': now()}
     def finish(s):
+        focus = s.get('learning_focus', {})
+        if plan.get('focus_key') and focus.get('key') == plan['focus_key']:
+            focus['remaining'] = max(0, focus.get('remaining', 0) - 1)
         s['learning_history'] = (s['learning_history'] + [record])[-30:]
         s['learning_plan'] = record
     store.change(finish)

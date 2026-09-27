@@ -62,7 +62,7 @@ def initial_state():
         "version": 1, "seeded": False, "turn_count": 0, "talk_pace": "normal",
         "affection": 0.25, "trust": 0.30,
         "pending": [], "memories": [], "preferences": [], "interests": [],
-        "personal_impressions": [], "improvements": [], "pillars_seeded": False, "research_threads": [],
+        "learning_focus": {}, "personal_impressions": [], "improvements": [], "pillars_seeded": False, "research_threads": [],
         "conversation_trials": [], "adopted_style": "",
         "video_learning_enabled": False, "video_visual_enabled": False, "next_video_at": 0,
         "learn_conversation": True, "learn_expression": True, "learning_plan": {}, "learning_direction": {}, "learning_history": [],
@@ -509,6 +509,7 @@ class CompanionStore:
                  "user_words": text(m.get("evidence", {}).get("user"), 360)}
                 for m in memories
             ],
+            "learning_focus": state["learning_focus"],
             "personal_impressions": state["personal_impressions"][-5:],
             "noah_preferences": [m["text"] for m in state["preferences"]],
             "interest_pillars": INTEREST_PILLARS,
@@ -522,7 +523,8 @@ class CompanionStore:
                 'observations': [{k: note[k] for k in ('title', 'url', 'at', 'at_seconds', 'observation', 'prototype', 'access', 'visual', 'visual_status') if k in note}
                                  for note in state['video_observations'][-2:]]}
         findings = [f for f in state["findings"] if not f["shared"]] if initiative else [
-            f for f in state["findings"] if f["topic"] in query or any(
+            f for f in state["findings"] if f["topic"] in query
+            or ("月ノ美兎" in query and "月ノ美兎" in f["topic"]) or any(
                 word in query for word in ("調べた", "リサーチ", "最近の興味", "何か発見")
             )
         ]
