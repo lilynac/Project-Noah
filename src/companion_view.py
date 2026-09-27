@@ -86,6 +86,16 @@ def journal_html(state):
         parts.append('<p>' + escape(QUALITY_LABELS[quality['reason']]) + ' · ' + date_label(quality['at']) + '</p>')
     if state['last_error']:
         parts.append('<p>' + escape(state['last_error']) + '</p>')
+    parts.append('<h3>わたしに残ったもの</h3>')
+    for impression in reversed(state.get('personal_impressions', [])[-5:]):
+        parts.append('<p><b>' + escape(impression['feeling']) + '</b><br>'
+                     + escape(impression['detail']) + '<br>惹かれた理由：' + escape(impression['reason'])
+                     + '<br>これから：' + escape(impression['want_to_try']))
+        if impression.get('previous_feeling'):
+            parts.append('<br>前の気持ち：' + escape(impression['previous_feeling'])
+                         + '<br>つながり・変化：' + escape(impression['change_reason']))
+        parts.append('<br>' + escape(impression['access']) + '<br>'
+                     + ' / '.join(safe_link(r['url'], r['title']) for r in impression['sources']) + '</p>')
     parts.append('<h3>いま気になっていること</h3>')
     for pillar, label in INTEREST_PILLARS.items():
         parts.append('<h4>' + escape(label) + '</h4>')

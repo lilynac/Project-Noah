@@ -62,7 +62,7 @@ def initial_state():
         "version": 1, "seeded": False, "turn_count": 0, "talk_pace": "normal",
         "affection": 0.25, "trust": 0.30,
         "pending": [], "memories": [], "preferences": [], "interests": [],
-        "improvements": [], "pillars_seeded": False, "research_threads": [],
+        "personal_impressions": [], "improvements": [], "pillars_seeded": False, "research_threads": [],
         "conversation_trials": [], "adopted_style": "",
         "video_learning_enabled": False, "video_visual_enabled": False, "next_video_at": 0,
         "learn_conversation": True, "learn_expression": True, "learning_plan": {}, "learning_direction": {}, "learning_history": [],
@@ -114,7 +114,7 @@ class CompanionStore:
             for key, value in state.items():
                 if type(value) in (int, float) and (not math.isfinite(value) or value < 0):
                     raise ValueError("Invalid companion number: " + key)
-            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials", "video_candidates", "video_observations", "video_preferences", "learning_history"):
+            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials", "video_candidates", "video_observations", "video_preferences", "learning_history", "personal_impressions"):
                 if not all(isinstance(item, dict) for item in state[key]):
                     raise ValueError("Invalid companion records: " + key)
         return state
@@ -232,7 +232,7 @@ class CompanionStore:
             if now < state["next_" + kind + "_at"]:
                 return None
             if kind == "reflection" and not state["pending"] and state['last_talk_at'] <= state['last_reflected_at'] and not any(
-                f["at"] > state["last_reflected_at"] for f in state["findings"]
+                f["at"] > state["last_reflected_at"] for f in state["findings"] + state["video_observations"]
             ):
                 return None
             if kind == "research" and (not state["research_enabled"] or not state["research_topic"]):
@@ -257,6 +257,8 @@ class CompanionStore:
         evidence = {item["id"]: item for item in batch["pending"]}
         preference_evidence = {**evidence, **{item['id']: item for item in batch['findings'][-2:]}}
         def update(state):
+            from .personal_discoveries import retain_impressions
+            retain_impressions(state, result, batch, now)
             for key, limit in (("memories", 16), ("preferences", 8)):
                 candidates = result.get(key, [])
                 if not isinstance(candidates, list):
@@ -507,6 +509,7 @@ class CompanionStore:
                  "user_words": text(m.get("evidence", {}).get("user"), 360)}
                 for m in memories
             ],
+            "personal_impressions": state["personal_impressions"][-5:],
             "noah_preferences": [m["text"] for m in state["preferences"]],
             "interest_pillars": INTEREST_PILLARS,
             "interests": state["interests"],
