@@ -52,7 +52,7 @@ def opening_mode(records):
 OPENING_GUIDANCE = {
     'thought': '感想をふっとこぼす回。質問も返答の誘いも添えず、具体と自分の好みだけで終える。',
     'invitation': '話題に誘う回。具体と自分の感想を先に置き、一緒に話す誘いを一つだけ添えてよい。相手の経験を聞き出す面接にしない。',
-    'callback': '共有した話の続きを置く回。shared_memoriesにある具体だけを新しい発見とつなぐ。架空の思い出や変化を作らず、質問せずに終える。',
+    'callback': '共有した話の続きを置く回。shared_memoriesまたはconversation_continuationにある具体だけを新しい発見とつなぐ。架空の思い出や変化を作らず、質問せずに終える。',
 }
 
 

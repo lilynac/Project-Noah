@@ -94,6 +94,14 @@ def journal_html(state):
         parts.append('<p>' + escape(QUALITY_LABELS[quality['reason']]) + ' · ' + date_label(quality['at']) + '</p>')
     if state['last_error']:
         parts.append('<p>' + escape(state['last_error']) + '</p>')
+    parts.append('<h3>ふたりの話の続き</h3>')
+    for thread in reversed(state.get('conversation_threads', [])[-5:]):
+        available = {n['id'] for n in state['findings'] + state['video_observations'] if not n.get('shared') and not n.get('duplicate_of')}
+        ready = (set(thread['finding_ids']) - set(thread['delivered_ids'])) & available
+        status = '続きを話したい' if ready else ('新しい発見を待っている' if thread['delivered_ids'] else '調べているところ')
+        parts.append('<p><b>' + escape(thread['topic']) + '</b> · ' + status
+                     + '<br>きっかけ：' + escape(thread['user_words'])
+                     + '<br>気になったこと：' + escape(thread['question']) + '</p>')
     parts.append('<h3>わたしに残ったもの</h3>')
     for impression in reversed(state.get('personal_impressions', [])[-5:]):
         parts.append('<p><b>' + escape(impression['feeling']) + '</b><br>'

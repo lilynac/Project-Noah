@@ -28,6 +28,7 @@ preferencesはNoah自身の好みの芽を最大1つ。
 それぞれ根拠となる今回のpendingのidをevidence_idに付ける。preferencesだけはrecent_findingsのidも使える。
 好みは分野名の羅列ではなく、何のどこに惹かれたかと理由を残す。ユーザーの好みをNoahの好みへ転記しない。
 設定文だけを根拠に新しい発見や記憶を作らない。根拠がなければ空配列。検索の事実をふたりが体験した思い出に変えない。
+conversation_linksは既存conversation_threadsの問いに、recent_findingsまたはrecent_video_observationsの具体的な発見が答えるとき最大2件。thread_id、finding_id、connection（つながる理由）を記す。単に同じ分野なだけでは結びつけない。新しい発見がなければ空配列。ユーザーが言っていない感情や約束を作らない。
 interestsは最大2つ。相手の関心とNoah自身の関心を区別し、Noah自身の探究も選んでよい。
 各interestにはpillarを付ける。expression（自分の表現と存在）、user（あなたへの関心）、curiosity（自分だけの好奇心）。
 userは今回のユーザー発言のevidence_idが必須。他の柱は自分の関心を選べる。既存の関心の理由を変えるなら会話またはrecent_findingsのevidence_idを付ける。
@@ -51,6 +52,7 @@ JSONだけを出力する。形式:
  "personal_impressions":[{"source_id":"...","detail":"...","feeling":"...","reason":"...","want_to_try":"...","relation":"new / deepened / changed","previous_id":"","change_reason":""}],
  "preferences":[{"text":"...","evidence_id":"..."}],
  "interests":[{"topic":"...","reason":"...","origin":"conversation または noah","pillar":"expression または user または curiosity","evidence_id":"..."}],
+ "conversation_links":[{"thread_id":"...","finding_id":"...","connection":"..."}],
  "explorations":[{"finding_id":"...","learned":"...","open_question":"...","next_reading":"...","changed_view":""}],
  "improvements":[{"observation":"...","change":"...","prototype":"...","check":"...","evidence_id":"...","technique":"concrete_detail / own_view / acknowledge_first または空文字"}],
  "learning_direction":{"goal":"conversation または expression","method":"article または captions","question":"具体的な問い","reason":"記録に基づく理由","check":"確かめ方"},
@@ -61,6 +63,7 @@ JSONだけを出力する。形式:
 def reflect(client, state):
     evidence = {
         "pending": state["pending"],
+        "conversation_threads": state.get("conversation_threads", [])[-8:],
         "memories": [{"text": m["text"]} for m in state["memories"]],
         "preferences": [{"text": m["text"]} for m in state["preferences"]],
         "interest_pillars": INTEREST_PILLARS,

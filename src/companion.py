@@ -62,7 +62,7 @@ def initial_state():
         "version": 1, "seeded": False, "turn_count": 0, "talk_pace": "normal",
         "affection": 0.25, "trust": 0.30,
         "pending": [], "memories": [], "preferences": [], "interests": [],
-        "learning_focus": {}, "personal_impressions": [], "improvements": [], "pillars_seeded": False, "research_threads": [],
+        "conversation_threads": [], "learning_focus": {}, "personal_impressions": [], "improvements": [], "pillars_seeded": False, "research_threads": [],
         "conversation_trials": [], "adopted_style": "",
         "video_learning_enabled": False, "video_visual_enabled": False, "next_video_at": 0,
         "learn_conversation": True, "learn_expression": True, "learning_plan": {}, "learning_direction": {}, "learning_history": [],
@@ -114,7 +114,7 @@ class CompanionStore:
             for key, value in state.items():
                 if type(value) in (int, float) and (not math.isfinite(value) or value < 0):
                     raise ValueError("Invalid companion number: " + key)
-            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials", "video_candidates", "video_observations", "video_preferences", "learning_history", "personal_impressions"):
+            for key in ("pending", "memories", "preferences", "interests", "findings", "outbox", "improvements", "research_threads", "conversation_trials", "video_candidates", "video_observations", "video_preferences", "learning_history", "personal_impressions", "conversation_threads"):
                 if not all(isinstance(item, dict) for item in state[key]):
                     raise ValueError("Invalid companion records: " + key)
         return state
@@ -293,6 +293,11 @@ class CompanionStore:
                         existing.update(reason=reason, pillar=pillar, at=now)
                 else:
                     state["interests"].append({"topic": topic, "reason": reason, "origin": origin, "pillar": pillar, "at": now})
+                if origin == 'conversation' and evidence.get(text(item.get('evidence_id'), 64)):
+                    from .conversation_threads import remember_thread
+                    remember_thread(state, topic, reason, evidence[text(item.get('evidence_id'), 64)], now)
+            from .conversation_threads import apply_links
+            apply_links(state, result, batch)
             # Keep room for all three pillars, rather than letting one crowd out the rest.
             state["interests"] = [i for pillar in INTEREST_PILLARS
                                   for i in [i for i in state['interests'] if interest_pillar(i) == pillar][-4:]]
@@ -446,9 +451,15 @@ class CompanionStore:
             raise ValueError("Research must include source citations")
         def update(state):
             finding_id = uuid4().hex
+            repeated = next((f for f in reversed(state['findings'])
+                             if f['topic'] == topic and ' '.join(f['summary'].split()) == ' '.join(summary.split())), None)
             state["findings"].append({"id": finding_id, "topic": topic, "summary": summary,
                                       "sources": sources, "at": now, "shared": False,
                                       "pillar": next((interest_pillar(i) for i in state["interests"] if i["topic"] == topic), "curiosity")})
+            if repeated:
+                state['findings'][-1]['duplicate_of'] = repeated['id']
+            from .conversation_threads import link_finding
+            link_finding(state, state["findings"][-1])
             state["findings"] = state["findings"][-12:]
             trail = next((t for t in state['research_threads'] if t['topic'] == topic), None)
             if trail is None:
@@ -494,6 +505,8 @@ class CompanionStore:
             for finding in state["findings"] + state["video_observations"]:
                 if finding["id"] == finding_id:
                     finding["shared"] = True
+            from .conversation_threads import acknowledge
+            acknowledge(state, finding_id)
             state["outbox"].append({"id": uuid4().hex, "text": message, "at": now})
             state["outbox"] = state["outbox"][-30:]
         self.change(update)
@@ -522,7 +535,7 @@ class CompanionStore:
                 'status': state['video_status'], 'access': '資料ごとのaccessを参照。静止画は動画全編の視聴・音声の確認ではない。',
                 'observations': [{k: note[k] for k in ('title', 'url', 'at', 'at_seconds', 'observation', 'prototype', 'access', 'visual', 'visual_status') if k in note}
                                  for note in state['video_observations'][-2:]]}
-        findings = [f for f in state["findings"] if not f["shared"]] if initiative else [
+        findings = [f for f in state["findings"] if not f["shared"] and not f.get("duplicate_of")] if initiative else [
             f for f in state["findings"] if f["topic"] in query
             or ("月ノ美兎" in query and "月ノ美兎" in f["topic"]) or any(
                 word in query for word in ("調べた", "リサーチ", "最近の興味", "何か発見")
@@ -533,8 +546,14 @@ class CompanionStore:
                              summary=n['observation'] + '\n確認範囲：' + n['access'],
                              sources=[{'title': n['title'], 'url': n['url'] + '&t=' + str(int(n['at_seconds']))}], at=n['at'])
                          for n in state['video_observations'] if not n.get('shared')]
-        finding = max(findings, key=lambda f: f['at']) if findings else None
+        from .conversation_threads import continuation
+        linked = [f for f in findings if continuation(state, f['id'])] if initiative else []
+        candidates = linked or findings
+        finding = max(candidates, key=lambda f: f['at']) if candidates else None
         if finding:
+            followup = continuation(state, finding["id"])
+            if followup:
+                result["conversation_continuation"] = followup
             result["research"] = {k: finding[k] for k in ("topic", "summary", "sources", "at")}
             result["research"]["time_scope"] = "atはNoahが調査した時刻。記事の公開日・出来事の日付ではない。時期が本文で確認できない話は現在の出来事として扱わない。"
             result['research_progress'] = research_history(state, finding['topic'])
