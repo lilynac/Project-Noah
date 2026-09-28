@@ -65,6 +65,7 @@ def run_plan(store, client, batch, now, cancelled=lambda: False):
     if stopped():
         store.change(lambda s: s.update(learning_plan={**plan, 'status': '中断'}))
         return
+    outcome = 'no_evidence'
     status = '根拠を得られず。次の計画で資料や方法を見直す。'
     try:
         if plan['method'] == 'article':
@@ -73,22 +74,30 @@ def run_plan(store, client, batch, now, cancelled=lambda: False):
             summary, sources = research(client, plan['topic'], research_history(batch, plan['topic']))
             if not stopped():
                 store.save_finding(plan['topic'], summary, sources, now())
+                outcome = 'saved'
                 status = '調査メモを保存。振り返りで具体的な工夫を検討する。'
         elif plan['method'] == 'captions':
             from .video_learning import run_research
             run_research(store, client, batch, now, stopped)
             if {n['id'] for n in store.snapshot()['video_observations']} - {n['id'] for n in before['video_observations']}:
+                outcome = 'saved'
                 status = '会話の観察を保存。根拠のある工夫を小さく試す。'
         else:
             from .video_vision import run_visual_research
             run_visual_research(store, client, now, stopped)
             if store.snapshot()['video_observations'] != before['video_observations']:
+                outcome = 'checked'
                 status = '静止画の確認結果を記録。表現案は未実装。'
         if stopped():
+            outcome = 'cancelled'
             status = '中断。確認済みの記録だけを保持。'
     except Exception:
+        outcome = 'failed'
         status = '調査に失敗。次の予定で方法を見直す。'
-    record = {**plan, 'status': status, 'at': now()}
+    after = store.snapshot()
+    original_ids = {n['id'] for n in before['findings'] + before['video_observations']}
+    evidence_ids = [n['id'] for n in after['findings'] + after['video_observations'] if n['id'] not in original_ids]
+    record = {**plan, 'status': status, 'outcome': outcome, 'evidence_ids': evidence_ids, 'at': now()}
     def finish(s):
         focus = s.get('learning_focus', {})
         if plan.get('focus_key') and focus.get('key') == plan['focus_key']:

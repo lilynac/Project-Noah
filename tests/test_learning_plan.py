@@ -29,6 +29,8 @@ def test_article_plan_stores_findings_and_history(tmp_path, monkeypatch):
     s = store.snapshot()
     assert s['findings'][0]['summary'] == '実際に読んだ内容'
     assert s['learning_history'][0]['goal'] == 'expression'
+    assert s['learning_history'][0]['evidence_ids'] == [s['findings'][0]['id']]
+    assert s['learning_history'][0]['outcome'] == 'saved'
     assert '調査メモを保存' in s['learning_plan']['status']
 
 

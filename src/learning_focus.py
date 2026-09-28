@@ -22,6 +22,18 @@ def focus_plan(state):
     remaining = focus.get('remaining', 0)
     if not spec or type(remaining) is not int or not 0 < remaining <= 6:
         return None
+    history = [p for p in state.get('learning_history', [])
+               if p.get('focus_key') == focus['key'] and p.get('at', 0) >= focus.get('at', 0)]
+    retried = {p.get('retry_of') for p in history if p.get('retry_of') is not None}
+    for previous in history:
+        failed = previous.get('outcome') in ('no_evidence', 'failed') or previous.get('status', '').startswith(('根拠を得られず', '調査に失敗'))
+        if (previous.get('method') == 'captions' and failed and previous.get('at') not in retried
+                and state.get('learn_conversation', True)):
+            return dict(goal='conversation', focus_key=focus['key'], method='article',
+                        topic=spec['topics'][1] + ' インタビュー 制作記録',
+                        question=spec['questions'][1], retry_of=previous['at'],
+                        reason='字幕では会話の根拠を得られなかったので、同じ問いを公開インタビューや制作記録から確かめたい。',
+                        check='記事で確認できた工夫だけを残す。字幕を読めた・動画を視聴したとは扱わない。')
     index = (6 - remaining) % 3
     goal = 'expression' if index == 2 else 'conversation'
     if not state.get('learn_' + goal, True):

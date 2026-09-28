@@ -536,6 +536,7 @@ class CompanionStore:
         finding = max(findings, key=lambda f: f['at']) if findings else None
         if finding:
             result["research"] = {k: finding[k] for k in ("topic", "summary", "sources", "at")}
+            result["research"]["time_scope"] = "atはNoahが調査した時刻。記事の公開日・出来事の日付ではない。時期が本文で確認できない話は現在の出来事として扱わない。"
             result['research_progress'] = research_history(state, finding['topic'])
         return json.dumps(result, ensure_ascii=False), finding
 

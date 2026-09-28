@@ -53,6 +53,11 @@ def journal_html(state):
                      + '<br>理由：' + escape(past.get('reason', ''))
                      + '<br>確かめ方：' + escape(past.get('check', ''))
                      + '<br>' + escape(past['status']) + '</p>')
+        evidence_ids = set(past.get('evidence_ids', []))
+        for record in state['findings'] + state['video_observations']:
+            if record['id'] in evidence_ids:
+                refs = record.get('sources') or [{'title': record.get('title', ''), 'url': record.get('url', '')}]
+                parts.append('<p>この計画で確認した資料：' + ' / '.join(safe_link(r['url'], r['title']) for r in refs) + '</p>')
     parts += ['<h3>興味の探求と、このあとの予定</h3>', '<p>' + escape(state['plan_reason']) + '</p>']
     for key, label, enabled in (("research", "気になることを調べる", "research_enabled"),
                                 ("talk", "あなたに話したい", "talk_enabled")):

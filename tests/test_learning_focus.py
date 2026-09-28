@@ -28,3 +28,21 @@ def test_named_question_retrieves_specific_research(tmp_path):
     store.save_finding('月ノ美兎 公式 インタビュー 企画 発想', '企画の具体例', [{'title':'資料','url':'https://example.org'}], 1)
     context,finding=store.context(query='月ノ美兎のどこが気になった？')
     assert finding is not None and '企画の具体例' in context
+
+
+def test_failed_caption_topic_gets_one_article_retry_within_budget():
+    s=initial_state(); s.update(video_learning_enabled=True,learning_focus={'key':'tsukino_mito','remaining':3,'at':10})
+    failed={'goal':'conversation','focus_key':'tsukino_mito','method':'captions','outcome':'no_evidence','at':20}
+    s['learning_history']=[failed]
+    plan=choose_plan(s)
+    assert plan['method']=='article' and plan['retry_of']==20
+    s['learning_history'].append({**plan,'outcome':'failed','at':30})
+    assert 'retry_of' not in choose_plan(s)
+    s['learning_focus']['remaining']=0
+    assert 'focus_key' not in choose_plan(s)
+
+
+def test_previous_focus_failure_does_not_trigger_new_focus_retry():
+    s=initial_state(); s.update(video_learning_enabled=True,learning_focus={'key':'tsukino_mito','remaining':6,'at':100})
+    s['learning_history']=[{'focus_key':'tsukino_mito','method':'captions','outcome':'failed','at':50}]
+    assert 'retry_of' not in choose_plan(s)
