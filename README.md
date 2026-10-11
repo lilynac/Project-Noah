@@ -164,7 +164,7 @@ python -m compileall -q src tests
 | [声の設定](docs/VOICE.md) | VOICEVOX Nemoの導入・試聴・クレジット |
 | [内部設計](docs/ARCHITECTURE.md) | モジュールとデータの流れ |
 | [設定](docs/CONFIG.md) | 環境変数と動作設定 |
-| [開発手順](docs/DEVELOPMENT.md) | 開発作業の進め方 |
+| [開発手順](docs/DEVELOPMENT.md) | 開発作業、開発ログ、テーマ別ストーリー編集、GitHubへの反映手順 |
 | [トラブルシューティング](docs/TROUBLESHOOTING.md) | 起動・運用時の問題と対処 |
 
 ### ローカルHTTPサービス
